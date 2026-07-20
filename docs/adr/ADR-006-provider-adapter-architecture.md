@@ -1,7 +1,7 @@
 # ADR-006: Provider Adapter Architecture
 
 ## Status
-Accepted
+Provisional (Subject to Composable Capability-Based Review)
 
 ## Context
 TuGPT.ai will integrate with multiple AI providers (OpenAI, Langdock, Mastra). We need a unified interface that abstracts vendor-specific SDK differences and prevents vendor lock-in.
