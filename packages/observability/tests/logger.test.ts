@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Logger, defaultLogger, sanitizeValue } from '../src/logger';
+import { Logger, sanitizeValue } from '../src/logger';
 
 describe('Structured JSON Logger & Secret Hygiene', () => {
   it('formats log messages as structured JSON', () => {

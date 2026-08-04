@@ -1,11 +1,17 @@
 /**
  * @file adapter.ts
  * @description Unified AI Provider Adapter Contract for TuGPT.ai.
- * 
- * CRITICAL SECURITY & STABILITY WARNING:
- * This contract represents the frozen interface for all AI provider adapters
- * (OpenAI, Langdock, Mastra). Do NOT modify or append to this contract without
- * a formal architectural review and approved RFC.
+ *
+ * STATUS: Provisional (see docs/adr/ADR-006-provider-adapter-architecture.md).
+ * This interface currently exposes only `generateCompletion` and covers
+ * synchronous chat completion alone. It intentionally does NOT yet define
+ * streaming, structured output, tool calls, embeddings, image/video
+ * generation, speech-to-text/text-to-speech, cancellation, retry policy, or
+ * usage/cost reporting. Those capabilities require a dedicated
+ * capability-based architecture review before this contract is expanded.
+ *
+ * Do not describe this contract as frozen or final. Any expansion should be
+ * tracked against ADR-006 and requires that review, not an ad-hoc addition.
  */
 
 export interface ChatMessage {
@@ -39,7 +45,8 @@ export interface AIProviderAdapter {
   
   /**
    * Generates a text completion based on standard ChatMessages.
-   * Locked to prevent contract shifts before Phase 3 authorization.
+   * The sole capability currently implemented (see ADR-006). Live production
+   * calls to external providers remain disabled until Phase 3 authorization.
    */
   generateCompletion(
     messages: readonly ChatMessage[],

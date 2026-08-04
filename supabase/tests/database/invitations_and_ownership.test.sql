@@ -12,14 +12,23 @@ SELECT plan(10);
 INSERT INTO auth.users (id, email, raw_user_meta_data) VALUES
   ('11111111-1111-1111-1111-111111111111', 'owner_a@tugpt.ai', '{"full_name": "Owner A"}'),
   ('22222222-2222-2222-2222-222222222222', 'admin_b@tugpt.ai', '{"full_name": "Admin B"}'),
-  ('33333333-3333-3333-3333-333333333333', 'invitee_c@tugpt.ai', '{"full_name": "Invitee C"}')
+  ('33333333-3333-3333-3333-333333333333', 'invitee_c@tugpt.ai', '{"full_name": "Invitee C"}'),
+  ('44444444-4444-4444-4444-444444444444', 'rollback_d@tugpt.ai', '{"full_name": "Rollback D"}')
 ON CONFLICT (id) DO NOTHING;
 
 -- Seed Profiles
+-- User D ('rollback_d@tugpt.ai') is seeded as a profile only and is
+-- deliberately NOT added to organization_members below. Test 7 needs a
+-- user who genuinely has no membership row before the test runs, so the
+-- rollback assertion (Test 7b) proves the earlier INSERT was undone rather
+-- than observing a pre-existing row created by an earlier test (User C
+-- already has real membership from Test 3's accept_invitation() call,
+-- which made it unsuitable as the Test 7 fixture).
 INSERT INTO public.profiles (id, email, full_name) VALUES
   ('11111111-1111-1111-1111-111111111111', 'owner_a@tugpt.ai', 'Owner A'),
   ('22222222-2222-2222-2222-222222222222', 'admin_b@tugpt.ai', 'Admin B'),
-  ('33333333-3333-3333-3333-333333333333', 'invitee_c@tugpt.ai', 'Invitee C')
+  ('33333333-3333-3333-3333-333333333333', 'invitee_c@tugpt.ai', 'Invitee C'),
+  ('44444444-4444-4444-4444-444444444444', 'rollback_d@tugpt.ai', 'Rollback D')
 ON CONFLICT (id) DO NOTHING;
 
 -- Seed Organizations
@@ -182,30 +191,65 @@ SELECT throws_ok(
 -- The exception must abort and rollback all changes in the nested block.
 SET LOCAL ROLE postgres;
 
--- We try to run a subtransaction via a DO block
+-- We try to run a subtransaction via a DO block.
+-- Distinct tagged dollar-quote delimiters ($statement$ / $block$) are used so
+-- the outer pgTAP string literal and the inner DO block body cannot collide,
+-- unlike the previous "$$DO $$$ ... $$$$" construction which the Postgres
+-- parser could not tokenize (outer $$ was closed by the inner DO's $$).
+--
+-- The exception handler intentionally catches only SQLSTATE 'P0001' — the
+-- specific code raised by private.prevent_last_owner_removal() (a bare
+-- `RAISE EXCEPTION` with no explicit SQLSTATE defaults to P0001, matching
+-- every other throws_ok() assertion in this file). Catching WHEN OTHERS here
+-- would silently swallow an unrelated failure (e.g. a broken INSERT) and let
+-- this test pass for the wrong reason; anything other than P0001 re-raises
+-- and correctly fails the test instead of being hidden.
+--
+-- Uses User D ('44444444-...'), seeded as a profile only with no existing
+-- organization_members row. User C ('33333333-...') was used originally,
+-- but Test 3 already grants User C real membership via accept_invitation(),
+-- so inserting User C again here raised 23505 (duplicate key) before the
+-- test could ever reach the intended P0001 ownership-protection path, and
+-- Test 7b then observed User C's pre-existing row instead of a genuine
+-- rollback. User D has no membership until this block runs, so the INSERT
+-- below is guaranteed to be new, and Test 7b's zero-count assertion proves
+-- the rollback rather than an accidental pre-existing row.
 SELECT lives_ok(
-  $$DO $$$
+  $statement$
+  DO $block$
   BEGIN
     -- This insert is valid
     INSERT INTO public.organization_members (organization_id, user_id, role)
-    VALUES ('d1d1d1d1-d1d1-d1d1-d1d1-d1d1d1d1d1d1', '33333333-3333-3333-3333-333333333333', 'agent');
-    
-    -- This triggers P0001 (aborts transaction block)
+    VALUES ('d1d1d1d1-d1d1-d1d1-d1d1-d1d1d1d1d1d1', '44444444-4444-4444-4444-444444444444', 'agent');
+
+    -- This triggers P0001 via private.prevent_last_owner_removal()
+    -- (User B is currently the organization's sole owner; see Tests 4-5).
     UPDATE public.organization_members
     SET role = 'admin'
     WHERE organization_id = 'd1d1d1d1-d1d1-d1d1-d1d1-d1d1d1d1d1d1'
       AND user_id = '22222222-2222-2222-2222-222222222222';
-  EXCEPTION WHEN OTHERS THEN
-    -- Rollback / cancel block
-    NULL;
+  EXCEPTION
+    WHEN SQLSTATE 'P0001' THEN
+      -- Expected ownership-protection exception: the PL/pgSQL exception
+      -- block's implicit subtransaction rolls back everything since BEGIN,
+      -- including the earlier valid INSERT above. Swallow only this code.
+      NULL;
   END;
-  $$$$,
+  $block$;
+  $statement$,
   'Test 7a: Traps exception inside nested query execution block'
 );
 
--- Verify that the valid member was NOT added because the transaction block rolled back
+-- Verify that User D's valid membership insert was rolled back along with
+-- the exception, and that User C's unrelated membership (from Test 3) is
+-- untouched by this assertion.
 SELECT is(
-  (SELECT COUNT(*)::int FROM public.organization_members WHERE organization_id = 'd1d1d1d1-d1d1-d1d1-d1d1-d1d1d1d1d1d1' AND user_id = '33333333-3333-3333-3333-333333333333'),
+  (
+    SELECT COUNT(*)::int
+    FROM public.organization_members
+    WHERE organization_id = 'd1d1d1d1-d1d1-d1d1-d1d1-d1d1d1d1d1d1'
+      AND user_id = '44444444-4444-4444-4444-444444444444'
+  ),
   0,
   'Test 7b: Validates that aborted subtransaction changes are rolled back completely'
 );
