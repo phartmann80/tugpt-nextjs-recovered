@@ -1,20 +1,25 @@
 {
-  "name": "@tugpt/jobs",
+  "name": "@tugpt/worker",
   "version": "0.1.0",
   "private": true,
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "type": "module",
   "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint ."
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",
-    "@tugpt/database": "workspace:*"
+    "@tugpt/database": "workspace:*",
+    "@tugpt/jobs": "workspace:*",
+    "@tugpt/observability": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20",
+    "tsx": "^4",
     "typescript": "^5",
     "vitest": "^4.1.10"
   }
