@@ -10,6 +10,7 @@ export class ProcessingError extends Error {
 /**
  * Processes an inbound WhatsApp message by calling the process_inbound_message RPC.
  * Throws ProcessingError with a normalized error code on failure.
+ * The error message is never logged; only structured fields are used in logs.
  */
 export async function processMessage(
   client: SupabaseClient,
@@ -21,6 +22,7 @@ export async function processMessage(
 
   if (error) {
     // Map RPC error messages to normalized error codes
+    // The raw error message is used only for internal classification, never logged
     const errorMsg = error.message || '';
     if (errorMsg.includes('RECEIPT_NOT_FOUND')) {
       throw new ProcessingError('RECEIPT_NOT_FOUND', errorMsg);

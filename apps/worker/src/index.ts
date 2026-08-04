@@ -40,8 +40,8 @@ const client = createAdminSupabaseClient(supabaseUrl, serviceRoleKey) as any;
       for (const job of jobs) {
         await processJob(client, queue, job, abortController.signal);
       }
-    } catch (err) {
-      console.error('Poll loop error:', err instanceof Error ? err.message : String(err));
+    } catch {
+      console.error(JSON.stringify({ normalizedErrorCode: 'DB_TRANSIENT', durationMs: 0 }));
       await sleep(POLL_INTERVAL_MS, abortController.signal);
     }
   }
@@ -75,7 +75,7 @@ async function processJob(
     const deleted = await queue.deleteJob(msgId);
     if (!deleted) {
       // Log-only: message remains available for redelivery
-      console.error('QUEUE_DELETE_FAILED for msg_id:', msgId.toString());
+      console.error(JSON.stringify({ normalizedErrorCode: 'QUEUE_DELETE_FAILED', queueMessageId: msgId.toString() }));
     }
   } catch (err) {
     if (err instanceof ProcessingError) {
@@ -126,8 +126,8 @@ async function recordFailure(
       p_error_code: errorCode,
       p_attempt_count: attemptCount,
     });
-  } catch (err) {
-    console.error('Failed to record processing failure:', err instanceof Error ? err.message : String(err));
+  } catch {
+    console.error(JSON.stringify({ normalizedErrorCode: 'DB_TRANSIENT', webhookEventId, attemptCount }));
   }
 }
 
@@ -141,7 +141,7 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-main().catch((err) => {
-  console.error('Fatal error:', err);
+main().catch(() => {
+  console.error(JSON.stringify({ normalizedErrorCode: 'FATAL' }));
   process.exit(1);
 });

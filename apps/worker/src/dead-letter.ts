@@ -21,7 +21,7 @@ export async function handleDeadLetter(
   });
 
   if (error) {
-    console.error('Dead-letter failed for msg_id:', msgId.toString(), 'error:', error.message);
+    console.error(JSON.stringify({ normalizedErrorCode: 'DEAD_LETTER_FAILED', queueMessageId: msgId.toString() }));
     throw error;
   }
 
