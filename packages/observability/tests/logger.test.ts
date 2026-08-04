@@ -65,7 +65,7 @@ describe('Structured JSON Logger & Secret Hygiene', () => {
       )
     ).toBe('Found API key [REDACTED] in configuration');
     expect(
-      sanitizeValue('msg', 'Supabase key sbp_123456789012345678901234 in body')
+      sanitizeValue('msg', 'Supabase key sbp_123456789012345678901234567890123456 in body')
     ).toBe('Supabase key [REDACTED] in body');
   });
 
@@ -84,6 +84,41 @@ describe('Structured JSON Logger & Secret Hygiene', () => {
     expect(parsed.error.name).toBe('Error');
     expect(parsed.error.message).toBe('Database connection lost');
     expect(parsed.error.stack).toBeDefined();
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('sanitizes secrets in error messages', () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const logger = new Logger();
+    const testErr = new Error(
+      'Request failed with Bearer secrettoken123 in authorization header'
+    );
+
+    logger.error('Query failure', testErr, { queryId: 'q-100' });
+
+    expect(consoleErrorSpy).toHaveBeenCalledOnce();
+    const parsed = JSON.parse(consoleErrorSpy.mock.calls[0][0]);
+
+    expect(parsed.error.message).toBe(
+      'Request failed with Bearer [REDACTED] in authorization header'
+    );
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('sanitizes Supabase keys in error messages', () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const logger = new Logger();
+    const testErr = new Error(
+      'Supabase key sbp_123456789012345678901234567890123456 in body'
+    );
+
+    logger.error('Connection failure', testErr);
+
+    const parsed = JSON.parse(consoleErrorSpy.mock.calls[0][0]);
+
+    expect(parsed.error.message).toBe('Supabase key [REDACTED] in body');
 
     consoleErrorSpy.mockRestore();
   });
