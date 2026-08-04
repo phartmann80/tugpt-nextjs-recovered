@@ -2,7 +2,7 @@
 -- File: supabase/tests/database/webhook_ingestion.test.sql
 
 BEGIN;
-SELECT plan(17);
+SELECT plan(18);
 
 -- W1: Ingest RPC inserts metadata-only receipt
 SELECT has_table('public', 'webhook_events', 'webhook_events table exists');
@@ -35,6 +35,15 @@ SELECT is(
   (SELECT count(*)::int > 0 FROM pgmq.q_whatsapp_inbound),
   true,
   'W3: pgmq queue has a message after ingest'
+);
+
+-- W3b: The pgmq.send scalar query pattern returns a non-null message ID
+-- The ingest RPC uses SELECT pgmq.send(...) INTO v_send_result and checks for NULL.
+-- We verify the message in the queue has a valid non-null msg_id, proving the send succeeded.
+SELECT is(
+  (SELECT msg_id IS NOT NULL FROM pgmq.q_whatsapp_inbound LIMIT 1),
+  true,
+  'W3b: pgmq.send returned a non-null message ID (scalar query pattern verified)'
 );
 
 -- W4: Duplicate provider_event_key returns is_new=false

@@ -3,6 +3,7 @@
 
 -- read_whatsapp_inbound_jobs: read messages from the whatsapp_inbound queue
 CREATE OR REPLACE FUNCTION public.read_whatsapp_inbound_jobs(
+  p_visibility_timeout_seconds INT DEFAULT 30,
   p_limit INT DEFAULT 1
 )
 RETURNS TABLE(
@@ -17,10 +18,10 @@ SECURITY DEFINER
 SET search_path = pg_catalog
 AS $$
 DECLARE
-  v_limit INT := p_limit;
+  v_limit INT := LEAST(GREATEST(p_limit, 1), 10);
 BEGIN
-  -- Validate limit (reject, do not clamp)
-  IF v_limit < 1 OR v_limit > 10 THEN
+  -- Validate visibility timeout (reject, do not clamp)
+  IF p_visibility_timeout_seconds < 1 OR p_visibility_timeout_seconds > 3600 THEN
     RAISE EXCEPTION 'INVALID_VISIBILITY_TIMEOUT' USING ERRCODE = '90007';
   END IF;
 
@@ -29,13 +30,17 @@ BEGIN
   -- We alias message -> payload in the output to match the RETURNS TABLE signature
   RETURN QUERY
   SELECT r.msg_id, r.read_ct, r.message AS payload, r.enqueued_at, r.vt
-  FROM pgmq.read('whatsapp_inbound', 30, v_limit) AS r;
+  FROM pgmq.read(
+    'whatsapp_inbound',
+    p_visibility_timeout_seconds,
+    v_limit
+  ) AS r;
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.read_whatsapp_inbound_jobs(INT)
+REVOKE ALL ON FUNCTION public.read_whatsapp_inbound_jobs(INT, INT)
 FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.read_whatsapp_inbound_jobs(INT)
+GRANT EXECUTE ON FUNCTION public.read_whatsapp_inbound_jobs(INT, INT)
 TO service_role;
 
 -- delete_whatsapp_inbound_job: delete a message from the queue

@@ -130,4 +130,15 @@ describe('pgmq-adapter', () => {
     const result = await adapter.setVisibility(999n, 60);
     expect(result).toBe(false);
   });
+
+  // Q15: readJobs passes visibility timeout to RPC
+  it('readJobs passes visibility timeout to RPC', async () => {
+    const mockClient = createMockClient({ data: [], error: null });
+    const adapter = new PgmqAdapter(mockClient);
+    await adapter.readJobs(1, 45);
+    expect(mockClient.rpc).toHaveBeenCalledWith('read_whatsapp_inbound_jobs', {
+      p_visibility_timeout_seconds: 45,
+      p_limit: 1,
+    });
+  });
 });

@@ -5,7 +5,7 @@ BEGIN;
 SELECT plan(7);
 
 -- Q1: Authenticated user cannot execute read_whatsapp_inbound_jobs
-SELECT has_function('public', 'read_whatsapp_inbound_jobs', ARRAY['int'], 'read_whatsapp_inbound_jobs exists');
+SELECT has_function('public', 'read_whatsapp_inbound_jobs', ARRAY['int', 'int'], 'read_whatsapp_inbound_jobs exists');
 
 -- Q2: Authenticated user cannot execute delete_whatsapp_inbound_job
 SELECT has_function('public', 'delete_whatsapp_inbound_job', ARRAY['bigint'], 'delete_whatsapp_inbound_job exists');
@@ -54,7 +54,7 @@ SELECT is(
 );
 
 -- Verify search_path is pg_catalog
-SELECT function_search_path_is('public', 'read_whatsapp_inbound_jobs', ARRAY['int'], 'pg_catalog', 'read_whatsapp_inbound_jobs uses pg_catalog search_path');
+SELECT function_search_path_is('public', 'read_whatsapp_inbound_jobs', ARRAY['int', 'int'], 'pg_catalog', 'read_whatsapp_inbound_jobs uses pg_catalog search_path');
 
 SELECT function_search_path_is('public', 'delete_whatsapp_inbound_job', ARRAY['bigint'], 'pg_catalog', 'delete_whatsapp_inbound_job uses pg_catalog search_path');
 

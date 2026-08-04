@@ -85,7 +85,9 @@ BEGIN
   );
 
   -- Send pgmq job with minimal payload
-  v_send_result := pgmq.send(
+  -- pgmq.send(queue_name text, msg jsonb, delay integer) -> setof bigint
+  -- Use SELECT ... INTO to consume the setof bigint as a scalar
+  SELECT pgmq.send(
     'whatsapp_inbound',
     jsonb_build_object(
       'webhookEventId', v_webhook_event_id,
@@ -93,7 +95,8 @@ BEGIN
       'timestamp', pg_catalog.now()
     ),
     0
-  );
+  )
+  INTO v_send_result;
 
   IF v_send_result IS NULL THEN
     RAISE EXCEPTION 'QUEUE_SEND_FAILED' USING ERRCODE = '90005';

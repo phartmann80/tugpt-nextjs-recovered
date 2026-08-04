@@ -11,7 +11,7 @@ export class PgmqAdapter {
    * Read messages from the whatsapp_inbound queue.
    * Returns up to p_limit messages with their delivery counts.
    */
-  async readJobs(limit: number = 1): Promise<
+  async readJobs(limit: number = 1, visibilityTimeoutSeconds: number = 30): Promise<
     Array<{
       msgId: bigint;
       readCt: number;
@@ -21,6 +21,7 @@ export class PgmqAdapter {
     }>
   > {
     const { data, error } = await this.client.rpc('read_whatsapp_inbound_jobs', {
+      p_visibility_timeout_seconds: visibilityTimeoutSeconds,
       p_limit: limit,
     });
 

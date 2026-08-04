@@ -276,6 +276,7 @@ export interface Database {
       };
       read_whatsapp_inbound_jobs: {
         Args: {
+          p_visibility_timeout_seconds: number;
           p_limit: number;
         };
         Returns: Array<{
