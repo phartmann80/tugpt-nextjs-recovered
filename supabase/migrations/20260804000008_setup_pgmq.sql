@@ -5,7 +5,7 @@
 CREATE EXTENSION IF NOT EXISTS pgmq;
 
 -- Create the whatsapp_inbound queue
-SELECT pgmq.create_queue('whatsapp_inbound');
+SELECT pgmq.create('whatsapp_inbound');
 
 -- Grant service_role access to the pgmq schema
 GRANT USAGE ON SCHEMA pgmq TO service_role;

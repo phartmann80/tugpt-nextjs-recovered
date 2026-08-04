@@ -24,9 +24,12 @@ BEGIN
     RAISE EXCEPTION 'INVALID_VISIBILITY_TIMEOUT' USING ERRCODE = '90007';
   END IF;
 
+  -- pgmq.read(queue_name text, vt integer, qty integer) -> message_record rows
+  -- message_record columns: msg_id, read_ct, enqueued_at, vt, message (jsonb)
+  -- We alias message -> payload in the output to match the RETURNS TABLE signature
   RETURN QUERY
-  SELECT msg_id, read_ct, payload, enqueued_at, vt
-  FROM pgmq.read('whatsapp_inbound', v_limit, 30);
+  SELECT r.msg_id, r.read_ct, r.message AS payload, r.enqueued_at, r.vt
+  FROM pgmq.read('whatsapp_inbound', 30, v_limit) AS r;
 END;
 $$;
 
@@ -47,6 +50,7 @@ AS $$
 DECLARE
   v_result BOOLEAN;
 BEGIN
+  -- pgmq.delete(queue_name text, msg_id bigint) -> boolean
   v_result := pgmq.delete('whatsapp_inbound', p_msg_id);
   RETURN COALESCE(v_result, FALSE);
 END;
@@ -68,17 +72,18 @@ SECURITY DEFINER
 SET search_path = pg_catalog
 AS $$
 DECLARE
-  v_result BOOLEAN;
-  v_vt TIMESTAMPTZ;
+  v_record pgmq.message_record;
 BEGIN
   -- Validate visibility timeout (reject, do not clamp)
   IF p_visibility_timeout_seconds < 1 OR p_visibility_timeout_seconds > 3600 THEN
     RAISE EXCEPTION 'INVALID_VISIBILITY_TIMEOUT' USING ERRCODE = '90007';
   END IF;
 
-  v_vt := pg_catalog.now() + (p_visibility_timeout_seconds || ' seconds')::INTERVAL;
-  v_result := pgmq.set_vt('whatsapp_inbound', p_msg_id, v_vt);
-  RETURN COALESCE(v_result, FALSE);
+  -- pgmq.set_vt(queue_name text, msg_id bigint, vt_offset integer) -> pgmq.message_record
+  -- The native function returns a message record, not a boolean.
+  -- We convert the presence of the returned record into a boolean result.
+  v_record := pgmq.set_vt('whatsapp_inbound', p_msg_id, p_visibility_timeout_seconds);
+  RETURN v_record IS NOT NULL;
 END;
 $$;
 

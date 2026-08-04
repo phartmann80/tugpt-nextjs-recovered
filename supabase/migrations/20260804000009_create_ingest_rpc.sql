@@ -24,7 +24,7 @@ DECLARE
   v_organization_id UUID;
   v_webhook_event_id UUID;
   v_existing_sha256 TEXT;
-  v_send_result BOOLEAN;
+  v_send_result BIGINT;
 BEGIN
   -- Resolve connection and org from the trusted database lookup
   SELECT id, organization_id
@@ -91,10 +91,11 @@ BEGIN
       'webhookEventId', v_webhook_event_id,
       'requestId', p_request_id,
       'timestamp', pg_catalog.now()
-    )
+    ),
+    0
   );
 
-  IF v_send_result IS NULL OR v_send_result = FALSE THEN
+  IF v_send_result IS NULL THEN
     RAISE EXCEPTION 'QUEUE_SEND_FAILED' USING ERRCODE = '90005';
   END IF;
 
