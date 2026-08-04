@@ -44,17 +44,25 @@ SELECT is(
 );
 
 -- Q7: No direct pgmq access for anon, authenticated, or PUBLIC
--- information_schema.schema_privileges does not exist; use has_schema_privilege() instead.
-SELECT is(
-  (SELECT count(*)::int FROM (
-    SELECT 1 WHERE has_schema_privilege('anon', 'pgmq', 'USAGE')
-    UNION ALL
-    SELECT 1 WHERE has_schema_privilege('authenticated', 'pgmq', 'USAGE')
-    UNION ALL
-    SELECT 1 WHERE has_schema_privilege('PUBLIC', 'pgmq', 'USAGE')
-  ) AS privs),
-  0,
-  'Q7: no pgmq schema USAGE privileges for anon, authenticated, or PUBLIC'
+-- PUBLIC is a pseudo-role, not a valid user argument for has_schema_privilege().
+-- Use aclexplode to check the PUBLIC (grantee=0) ACL entry directly.
+SELECT ok(
+  NOT has_schema_privilege('anon', 'pgmq', 'USAGE')
+  AND NOT has_schema_privilege('authenticated', 'pgmq', 'USAGE')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_namespace AS n
+    CROSS JOIN LATERAL pg_catalog.aclexplode(
+      COALESCE(
+        n.nspacl,
+        pg_catalog.acldefault('n', n.nspowner)
+      )
+    ) AS acl
+    WHERE n.nspname = 'pgmq'
+      AND acl.grantee = 0::oid
+      AND acl.privilege_type = 'USAGE'
+  ),
+  'Q7: no pgmq schema USAGE for anon, authenticated, or PUBLIC'
 );
 
 -- Verify search_path is pg_catalog for all 3 queue wrapper RPCs via pg_proc.proconfig
