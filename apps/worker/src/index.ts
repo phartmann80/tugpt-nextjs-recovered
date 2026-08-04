@@ -41,7 +41,7 @@ const client = createAdminSupabaseClient(supabaseUrl, serviceRoleKey) as any;
         await processJob(client, queue, job, abortController.signal);
       }
     } catch {
-      console.error(JSON.stringify({ normalizedErrorCode: 'DB_TRANSIENT', durationMs: 0 }));
+      console.error(JSON.stringify({ normalizedErrorCode: 'QUEUE_READ_ERROR', durationMs: 0 }));
       await sleep(POLL_INTERVAL_MS, abortController.signal);
     }
   }
@@ -99,7 +99,7 @@ async function processJob(
         await handleDeadLetter(client, msgId, requestId, errorCode, readCt, webhookEventId);
       }
     } else {
-      // Unknown error: treat as DB_TRANSIENT for safety
+      // Unknown error: classify as DB_TRANSIENT (transient database-processing failure)
       if (readCt < MAX_ATTEMPTS) {
         await recordFailure(client, webhookEventId, 'DB_TRANSIENT', readCt);
         const visibilitySet = await queue.setVisibility(msgId, VISIBILITY_TIMEOUT_SECONDS);
@@ -142,6 +142,6 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 main().catch(() => {
-  console.error(JSON.stringify({ normalizedErrorCode: 'FATAL' }));
+  console.error(JSON.stringify({ normalizedErrorCode: 'QUEUE_TRANSPORT_ERROR' }));
   process.exit(1);
 });
