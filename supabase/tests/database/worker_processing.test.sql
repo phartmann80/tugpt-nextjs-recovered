@@ -113,16 +113,26 @@ SELECT is(
   'P8: processing already-processed receipt returns success=true (idempotent skip)'
 );
 
--- P9: Process RPC updates attempt_count and last_error_code on failure
+-- P9: record_inbound_processing_failure on a received (unprocessed) receipt
+-- Use a separate receipt (wamid.p009) that is ingested but NOT processed,
+-- so its status remains 'received' and failure recording is valid.
+-- wamid.p003 was processed in P3 and is terminal — using it would correctly return FALSE.
+SELECT * FROM public.ingest_whatsapp_message_event(
+  'conn-001', 'meta', 'wamid.p009', 'message',
+  '0000000000000000000000000000000000000000000000000000000000000009',
+  'wamid.p009', '15550000009', 'text', 'Failure test',
+  '2026-01-01T00:04:00Z'::timestamptz, 'req-p009'
+);
+
 SELECT is(
   public.record_inbound_processing_failure(
-    (SELECT id FROM public.webhook_events WHERE provider_event_key = 'wamid.p003'),
+    (SELECT id FROM public.webhook_events WHERE provider_event_key = 'wamid.p009'),
     'DB_TRANSIENT',
     2
   )
-  AND (SELECT attempt_count FROM public.webhook_events WHERE provider_event_key = 'wamid.p003') = 2,
+  AND (SELECT attempt_count FROM public.webhook_events WHERE provider_event_key = 'wamid.p009') = 2,
   true,
-  'P9: record_inbound_processing_failure returns true and attempt_count updated to 2'
+  'P9: record_inbound_processing_failure returns true and attempt_count updated to 2 on received receipt'
 );
 
 -- P10: Redelivery after processing but before acknowledgment is safe
@@ -137,36 +147,39 @@ SELECT is(
 -- P11: Retry attempt state persists after processing error
 SELECT is(
   public.record_inbound_processing_failure(
-    (SELECT id FROM public.webhook_events WHERE provider_event_key = 'wamid.p003'),
+    (SELECT id FROM public.webhook_events WHERE provider_event_key = 'wamid.p009'),
     'DB_TRANSIENT',
     3
   )
-  AND (SELECT attempt_count FROM public.webhook_events WHERE provider_event_key = 'wamid.p003') = 3,
+  AND (SELECT attempt_count FROM public.webhook_events WHERE provider_event_key = 'wamid.p009') = 3,
   true,
-  'P11: second failure recording succeeds and attempt_count persists at 3'
+  'P11: second failure recording succeeds and attempt_count persists at 3 on received receipt'
 );
 
 -- P12: Attempt count cannot move backward (monotonic)
 SELECT is(
   public.record_inbound_processing_failure(
-    (SELECT id FROM public.webhook_events WHERE provider_event_key = 'wamid.p003'),
+    (SELECT id FROM public.webhook_events WHERE provider_event_key = 'wamid.p009'),
     'DB_TRANSIENT',
     1
-  ),
+  )
+  AND (SELECT attempt_count FROM public.webhook_events WHERE provider_event_key = 'wamid.p009') = 3,
   true,
-  'P12: record_inbound_processing_failure accepts lower attempt_count (GREATEST prevents backward movement, stays at 3)'
+  'P12: lower attempt_count does not reduce stored value (GREATEST keeps 3, monotonic protection)'
 );
 
 -- P13: record_inbound_processing_failure does not overwrite processed with failed
+-- Also proves a processed receipt cannot be moved backward into a retryable state.
 SELECT is(
   NOT public.record_inbound_processing_failure(
     (SELECT id FROM public.webhook_events WHERE provider_event_key = 'wamid.p001'),
     'DB_TRANSIENT',
     1
   )
-  AND (SELECT status FROM public.webhook_events WHERE provider_event_key = 'wamid.p001') = 'processed',
+  AND (SELECT status FROM public.webhook_events WHERE provider_event_key = 'wamid.p001') = 'processed'
+  AND (SELECT attempt_count FROM public.webhook_events WHERE provider_event_key = 'wamid.p001') = 1,
   true,
-  'P13: record_inbound_processing_failure returns false for processed receipt (no overwrite, status stays processed)'
+  'P13: record_inbound_processing_failure returns false for processed receipt (no overwrite, status stays processed, attempt_count unchanged)'
 );
 
 -- P14: Duplicate message is idempotent success (not dead-letter)

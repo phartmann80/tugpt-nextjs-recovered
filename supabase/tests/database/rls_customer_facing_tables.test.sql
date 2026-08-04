@@ -74,13 +74,15 @@ SELECT is(
 );
 
 -- C8: Conversations UPDATE policy restricted to owner/admin via has_org_role
+-- The migration creates conversations_insert_update as FOR ALL (not FOR UPDATE),
+-- which pg_policies records as cmd = 'ALL'. Match both to find the policy.
 SELECT is(
   (SELECT count(*)::int FROM pg_policies
    WHERE schemaname = 'public' AND tablename = 'conversations'
-   AND cmd = 'UPDATE' AND roles @> ARRAY['authenticated']::name[]
+   AND cmd IN ('UPDATE', 'ALL') AND roles @> ARRAY['authenticated']::name[]
    AND qual LIKE '%has_org_role%'),
   1,
-  'C8: conversations UPDATE policy restricted to owner/admin via has_org_role (service_role bypasses RLS)'
+  'C8: conversations UPDATE policy restricted to owner/admin via has_org_role (FOR ALL policy, service_role bypasses RLS)'
 );
 
 -- C9: messages table exists with RLS enabled
