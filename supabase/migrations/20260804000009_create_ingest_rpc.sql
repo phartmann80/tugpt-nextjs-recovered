@@ -34,7 +34,7 @@ BEGIN
     AND status = 'active';
 
   IF v_connection_id IS NULL THEN
-    RAISE EXCEPTION 'CONNECTION_NOT_FOUND';
+    RAISE EXCEPTION 'CONNECTION_NOT_FOUND' USING ERRCODE = '90003';
   END IF;
 
   -- Check for duplicate event key
@@ -59,7 +59,7 @@ BEGIN
       RETURN;
     ELSE
       -- Same key, different content: mismatch
-      RAISE EXCEPTION 'EVENT_KEY_PAYLOAD_MISMATCH';
+      RAISE EXCEPTION 'EVENT_KEY_PAYLOAD_MISMATCH' USING ERRCODE = '90004';
     END IF;
   END IF;
 
@@ -95,7 +95,7 @@ BEGIN
   );
 
   IF v_send_result IS NULL OR v_send_result = FALSE THEN
-    RAISE EXCEPTION 'QUEUE_SEND_FAILED';
+    RAISE EXCEPTION 'QUEUE_SEND_FAILED' USING ERRCODE = '90005';
   END IF;
 
   RETURN QUERY SELECT TRUE, v_webhook_event_id;

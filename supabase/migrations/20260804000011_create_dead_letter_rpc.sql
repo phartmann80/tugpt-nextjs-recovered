@@ -34,7 +34,7 @@ BEGIN
     -- Verify the receipt exists
     PERFORM 1 FROM public.webhook_events WHERE id = p_webhook_event_id;
     IF NOT FOUND THEN
-      RAISE EXCEPTION 'RECEIPT_NOT_FOUND';
+      RAISE EXCEPTION 'RECEIPT_NOT_FOUND' USING ERRCODE = '90001';
     END IF;
   END IF;
 
@@ -65,7 +65,7 @@ BEGIN
 
     IF v_archive_result IS NULL OR v_archive_result = FALSE THEN
       -- Archive failed: rollback the failed_jobs insert
-      RAISE EXCEPTION 'ARCHIVE_FAILED';
+      RAISE EXCEPTION 'ARCHIVE_FAILED' USING ERRCODE = '90006';
     END IF;
 
     -- Set receipt to failed if webhook_event_id is provided

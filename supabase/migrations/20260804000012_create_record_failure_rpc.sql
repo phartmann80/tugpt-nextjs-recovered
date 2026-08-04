@@ -27,7 +27,7 @@ BEGIN
   WHERE id = p_webhook_event_id;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'RECEIPT_NOT_FOUND';
+    RAISE EXCEPTION 'RECEIPT_NOT_FOUND' USING ERRCODE = '90001';
   END IF;
 
   -- Must not overwrite processed or failed with received

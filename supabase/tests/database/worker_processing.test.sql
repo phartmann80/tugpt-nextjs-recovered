@@ -277,8 +277,8 @@ SELECT throws_ok(
   $$SELECT * FROM public.process_inbound_message(
     (SELECT id FROM public.webhook_events WHERE provider_event_key = 'wamid.p016')
   )$$,
-  'STAGING_NOT_FOUND',
-  'P16: missing staging with unprocessed receipt raises STAGING_NOT_FOUND (non-retryable)'
+  '90002',
+  'P16: missing staging with unprocessed receipt raises SQLSTATE 90002 (STAGING_NOT_FOUND, non-retryable)'
 );
 
 -- P17: One receipt creates one message through webhook_event_id uniqueness

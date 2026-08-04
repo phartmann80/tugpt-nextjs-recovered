@@ -21,7 +21,7 @@ DECLARE
 BEGIN
   -- Validate limit (reject, do not clamp)
   IF v_limit < 1 OR v_limit > 10 THEN
-    RAISE EXCEPTION 'INVALID_VISIBILITY_TIMEOUT';
+    RAISE EXCEPTION 'INVALID_VISIBILITY_TIMEOUT' USING ERRCODE = '90007';
   END IF;
 
   RETURN QUERY
@@ -73,7 +73,7 @@ DECLARE
 BEGIN
   -- Validate visibility timeout (reject, do not clamp)
   IF p_visibility_timeout_seconds < 1 OR p_visibility_timeout_seconds > 3600 THEN
-    RAISE EXCEPTION 'INVALID_VISIBILITY_TIMEOUT';
+    RAISE EXCEPTION 'INVALID_VISIBILITY_TIMEOUT' USING ERRCODE = '90007';
   END IF;
 
   v_vt := pg_catalog.now() + (p_visibility_timeout_seconds || ' seconds')::INTERVAL;

@@ -60,8 +60,8 @@ SELECT throws_ok(
     'wamid.fail001', '15559876543', 'text', 'Fail',
     '2026-01-01T00:00:00Z'::timestamptz, 'req-003'
   )$$,
-  'CONNECTION_NOT_FOUND',
-  'W5: ingest raises CONNECTION_NOT_FOUND for unknown connection'
+  '90003',
+  'W5: ingest raises SQLSTATE 90003 (CONNECTION_NOT_FOUND) for unknown connection'
 );
 
 -- Verify no receipt was created for the failed ingest
@@ -101,8 +101,8 @@ SELECT throws_ok(
     'wamid.test009', '15559876543', 'text', 'Test',
     '2026-01-01T00:00:00Z'::timestamptz, 'req-009'
   )$$,
-  'CONNECTION_NOT_FOUND',
-  'W9: ingest raises CONNECTION_NOT_FOUND for unknown provider connection identifier'
+  '90003',
+  'W9: ingest raises SQLSTATE 90003 (CONNECTION_NOT_FOUND) for unknown provider connection identifier'
 );
 
 -- W10: Tampered tenant identifier cannot produce cross-tenant writes
@@ -183,8 +183,8 @@ SELECT throws_ok(
     'wamid.test001', '15559876543', 'text', 'Different content',
     '2026-01-01T00:00:00Z'::timestamptz, 'req-016'
   )$$,
-  'EVENT_KEY_PAYLOAD_MISMATCH',
-  'W16: duplicate event key with different canonical hash is rejected'
+  '90004',
+  'W16: duplicate event key with different canonical hash is rejected (SQLSTATE 90004)'
 );
 
 -- W17: Per-event hashes differ for different messages in same envelope

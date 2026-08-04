@@ -78,8 +78,8 @@ SELECT throws_ok(
     88888::bigint, 'req-d005', 'DB_TRANSIENT', 3,
     (SELECT id FROM public.webhook_events WHERE provider_event_key = 'wamid.d001')
   )$$,
-  'ARCHIVE_FAILED',
-  'D5: archive_failed_job raises ARCHIVE_FAILED when pgmq archive fails (atomic rollback)'
+  '90006',
+  'D5: archive_failed_job raises SQLSTATE 90006 (ARCHIVE_FAILED) when pgmq archive fails (atomic rollback)'
 );
 
 -- Verify no failed_jobs record was created for the failed archive

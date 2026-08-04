@@ -17,7 +17,7 @@ async function main(): Promise<void> {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const client = createAdminSupabaseClient(supabaseUrl, serviceRoleKey) as any;
+  const client = createAdminSupabaseClient(supabaseUrl, serviceRoleKey) as any;
   const queue = new PgmqAdapter(client);
 
   const abortController = new AbortController();

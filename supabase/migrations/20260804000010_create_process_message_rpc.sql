@@ -23,7 +23,7 @@ BEGIN
   FOR UPDATE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'RECEIPT_NOT_FOUND';
+    RAISE EXCEPTION 'RECEIPT_NOT_FOUND' USING ERRCODE = '90001';
   END IF;
 
   -- Check if already processed
@@ -44,7 +44,17 @@ BEGIN
 
   IF NOT FOUND THEN
     -- Staging not found for unprocessed receipt: non-retryable
-    RAISE EXCEPTION 'STAGING_NOT_FOUND';
+    RAISE EXCEPTION 'STAGING_NOT_FOUND' USING ERRCODE = '90002';
+  END IF;
+
+  -- Validate staging data integrity
+  IF v_staging.contact_identifier IS NULL OR v_staging.provider_message_id IS NULL THEN
+    RAISE EXCEPTION 'INVALID_STAGING' USING ERRCODE = '90008';
+  END IF;
+
+  -- Validate message kind is supported
+  IF v_staging.message_kind NOT IN ('text', 'image', 'video', 'audio', 'document', 'template') THEN
+    RAISE EXCEPTION 'UNSUPPORTED_MESSAGE_KIND' USING ERRCODE = '90009';
   END IF;
 
   -- Find or create conversation (preserve existing status)
