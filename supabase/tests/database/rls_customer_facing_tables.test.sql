@@ -6,11 +6,25 @@ SELECT plan(11);
 
 -- C1: Org member can SELECT from business_profiles
 SELECT has_table('public', 'business_profiles', 'business_profiles table exists');
-SELECT is_row_level_security_enabled('public', 'business_profiles', 'RLS enabled on business_profiles');
+SELECT ok(
+  (
+    SELECT c.relrowsecurity
+    FROM pg_catalog.pg_class AS c
+    WHERE c.oid = 'public.business_profiles'::regclass
+  ),
+  'RLS enabled on business_profiles'
+);
 
 -- C2: Org member can SELECT from whatsapp_connections
 SELECT has_table('public', 'whatsapp_connections', 'whatsapp_connections table exists');
-SELECT is_row_level_security_enabled('public', 'whatsapp_connections', 'RLS enabled on whatsapp_connections');
+SELECT ok(
+  (
+    SELECT c.relrowsecurity
+    FROM pg_catalog.pg_class AS c
+    WHERE c.oid = 'public.whatsapp_connections'::regclass
+  ),
+  'RLS enabled on whatsapp_connections'
+);
 
 -- C3: Ordinary member cannot INSERT into whatsapp_connections
 -- Only owner/admin can INSERT/UPDATE via the whatsapp_connections_insert_update policy
@@ -46,7 +60,14 @@ SELECT is(
 
 -- C6: Org member can SELECT from conversations
 SELECT has_table('public', 'conversations', 'conversations table exists');
-SELECT is_row_level_security_enabled('public', 'conversations', 'RLS enabled on conversations');
+SELECT ok(
+  (
+    SELECT c.relrowsecurity
+    FROM pg_catalog.pg_class AS c
+    WHERE c.oid = 'public.conversations'::regclass
+  ),
+  'RLS enabled on conversations'
+);
 
 -- C7: Ordinary member cannot INSERT or DELETE conversations
 -- Only owner/admin can INSERT/UPDATE via conversations_insert_update policy; no DELETE policy exists
@@ -72,7 +93,14 @@ SELECT is(
 
 -- C9: Org member can SELECT from messages
 SELECT has_table('public', 'messages', 'messages table exists');
-SELECT is_row_level_security_enabled('public', 'messages', 'RLS enabled on messages');
+SELECT ok(
+  (
+    SELECT c.relrowsecurity
+    FROM pg_catalog.pg_class AS c
+    WHERE c.oid = 'public.messages'::regclass
+  ),
+  'RLS enabled on messages'
+);
 
 -- C10: Authenticated user cannot INSERT/UPDATE/DELETE messages
 -- Only a SELECT policy exists for authenticated; INSERT/UPDATE/DELETE are revoked

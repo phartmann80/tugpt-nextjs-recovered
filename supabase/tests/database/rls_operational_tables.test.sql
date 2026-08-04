@@ -17,12 +17,40 @@ SELECT has_table('public', 'failed_jobs', 'failed_jobs table exists');
 -- RLS is ENABLED + FORCE with no policies for authenticated users.
 -- With FORCE, even the table owner is subject to RLS.
 -- No SELECT policy exists for authenticated, so all rows are invisible.
-SELECT is_row_level_security_enabled('public', 'webhook_events', 'RLS enabled on webhook_events');
-SELECT is_row_level_security_forced('public', 'webhook_events', 'RLS forced on webhook_events');
+SELECT ok(
+  (
+    SELECT c.relrowsecurity
+    FROM pg_catalog.pg_class AS c
+    WHERE c.oid = 'public.webhook_events'::regclass
+  ),
+  'RLS enabled on webhook_events'
+);
+SELECT ok(
+  (
+    SELECT c.relforcerowsecurity
+    FROM pg_catalog.pg_class AS c
+    WHERE c.oid = 'public.webhook_events'::regclass
+  ),
+  'RLS forced on webhook_events'
+);
 
 -- R5: Authenticated owner cannot SELECT from failed_jobs
-SELECT is_row_level_security_enabled('public', 'failed_jobs', 'RLS enabled on failed_jobs');
-SELECT is_row_level_security_forced('public', 'failed_jobs', 'RLS forced on failed_jobs');
+SELECT ok(
+  (
+    SELECT c.relrowsecurity
+    FROM pg_catalog.pg_class AS c
+    WHERE c.oid = 'public.failed_jobs'::regclass
+  ),
+  'RLS enabled on failed_jobs'
+);
+SELECT ok(
+  (
+    SELECT c.relforcerowsecurity
+    FROM pg_catalog.pg_class AS c
+    WHERE c.oid = 'public.failed_jobs'::regclass
+  ),
+  'RLS forced on failed_jobs'
+);
 
 -- R6: Authenticated admin cannot INSERT into failed_jobs
 -- Verify no INSERT policy exists on failed_jobs for authenticated role

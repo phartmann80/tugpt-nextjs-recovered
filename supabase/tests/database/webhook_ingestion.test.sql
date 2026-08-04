@@ -12,7 +12,7 @@ SELECT has_table('public', 'inbound_message_staging', 'inbound_message_staging t
 
 -- W3: Ingest RPC sends pgmq job (verified by queue having a message after ingest)
 -- Set up test data: organization, business profile, active connection
-INSERT INTO public.organizations (id, name) VALUES ('11111111-1111-1111-1111-111111111111', 'Test Org');
+INSERT INTO public.organizations (id, name, slug) VALUES ('11111111-1111-1111-1111-111111111111', 'Test Org', 'phase3a-test-org');
 INSERT INTO public.business_profiles (id, organization_id, display_name)
 VALUES ('22222222-2222-2222-2222-222222222222', '11111111-1111-1111-1111-111111111111', 'Test Business');
 INSERT INTO public.whatsapp_connections (id, organization_id, business_profile_id, phone_number, provider_phone_number_id, status)

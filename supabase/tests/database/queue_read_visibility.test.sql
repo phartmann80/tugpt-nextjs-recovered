@@ -6,7 +6,7 @@ BEGIN;
 SELECT plan(6);
 
 -- Set up test data: organization, business profile, active connection
-INSERT INTO public.organizations (id, name) VALUES ('55555555-5555-5555-5555-555555555555', 'Visibility Test Org');
+INSERT INTO public.organizations (id, name, slug) VALUES ('55555555-5555-5555-5555-555555555555', 'Visibility Test Org', 'phase3a-vis-test-org');
 INSERT INTO public.business_profiles (id, organization_id, display_name)
 VALUES ('66666666-6666-6666-6666-666666666666', '55555555-5555-5555-5555-555555555555', 'Visibility Test Business');
 INSERT INTO public.whatsapp_connections (id, organization_id, business_profile_id, phone_number, provider_phone_number_id, status)

@@ -31,16 +31,46 @@ SELECT is(
 );
 
 -- E6: No RPC depends on caller-controlled search_path
--- All functions use SET search_path = pg_catalog
-SELECT function_search_path_is('public', 'ingest_whatsapp_message_event', ARRAY[
-  'text', 'text', 'text', 'text', 'text', 'text', 'text', 'text', 'text', 'timestamptz', 'text'
-], 'pg_catalog', 'ingest_whatsapp_message_event uses pg_catalog search_path');
+-- All functions use SET search_path = pg_catalog, verified via pg_proc.proconfig
+SELECT ok(
+  COALESCE(
+    (SELECT 'search_path=pg_catalog' = ANY(p.proconfig)
+     FROM pg_catalog.pg_proc AS p
+     WHERE p.oid = 'public.ingest_whatsapp_message_event(text,text,text,text,text,text,text,text,text,timestamp with time zone,text)'::regprocedure),
+    false
+  ),
+  'ingest_whatsapp_message_event uses pg_catalog search_path'
+);
 
-SELECT function_search_path_is('public', 'process_inbound_message', ARRAY['uuid'], 'pg_catalog', 'process_inbound_message uses pg_catalog search_path');
+SELECT ok(
+  COALESCE(
+    (SELECT 'search_path=pg_catalog' = ANY(p.proconfig)
+     FROM pg_catalog.pg_proc AS p
+     WHERE p.oid = 'public.process_inbound_message(uuid)'::regprocedure),
+    false
+  ),
+  'process_inbound_message uses pg_catalog search_path'
+);
 
-SELECT function_search_path_is('public', 'archive_failed_job', ARRAY['bigint', 'text', 'text', 'integer', 'uuid'], 'pg_catalog', 'archive_failed_job uses pg_catalog search_path');
+SELECT ok(
+  COALESCE(
+    (SELECT 'search_path=pg_catalog' = ANY(p.proconfig)
+     FROM pg_catalog.pg_proc AS p
+     WHERE p.oid = 'public.archive_failed_job(bigint,text,text,integer,uuid)'::regprocedure),
+    false
+  ),
+  'archive_failed_job uses pg_catalog search_path'
+);
 
-SELECT function_search_path_is('public', 'record_inbound_processing_failure', ARRAY['uuid', 'text', 'int'], 'pg_catalog', 'record_inbound_processing_failure uses pg_catalog search_path');
+SELECT ok(
+  COALESCE(
+    (SELECT 'search_path=pg_catalog' = ANY(p.proconfig)
+     FROM pg_catalog.pg_proc AS p
+     WHERE p.oid = 'public.record_inbound_processing_failure(uuid,text,integer)'::regprocedure),
+    false
+  ),
+  'record_inbound_processing_failure uses pg_catalog search_path'
+);
 
 -- E7: Ordinary roles cannot create an object that shadows an RPC dependency
 -- All RPCs use SECURITY DEFINER with SET search_path = pg_catalog,
