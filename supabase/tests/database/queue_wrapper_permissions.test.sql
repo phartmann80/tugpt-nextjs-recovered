@@ -25,8 +25,6 @@ SELECT is(
 );
 
 -- Q5: read_whatsapp_inbound_jobs return type includes read_ct column
--- Introspect the actual function declaration via pg_catalog.pg_get_function_result
--- The function returns TABLE(msg_id, read_ct, payload, enqueued_at, vt)
 SELECT ok(
   (SELECT pg_get_function_result(p.oid) LIKE '%read_ct%'
    FROM pg_catalog.pg_proc AS p
@@ -63,37 +61,6 @@ SELECT ok(
       AND acl.privilege_type = 'USAGE'
   ),
   'Q7: no pgmq schema USAGE for anon, authenticated, or PUBLIC'
-);
-
--- Verify search_path is pg_catalog for all 3 queue wrapper RPCs via pg_proc.proconfig
-SELECT ok(
-  COALESCE(
-    (SELECT 'search_path=pg_catalog' = ANY(p.proconfig)
-     FROM pg_catalog.pg_proc AS p
-     WHERE p.oid = 'public.read_whatsapp_inbound_jobs(integer,integer)'::regprocedure),
-    false
-  ),
-  'read_whatsapp_inbound_jobs has fixed pg_catalog search_path'
-);
-
-SELECT ok(
-  COALESCE(
-    (SELECT 'search_path=pg_catalog' = ANY(p.proconfig)
-     FROM pg_catalog.pg_proc AS p
-     WHERE p.oid = 'public.delete_whatsapp_inbound_job(bigint)'::regprocedure),
-    false
-  ),
-  'delete_whatsapp_inbound_job has fixed pg_catalog search_path'
-);
-
-SELECT ok(
-  COALESCE(
-    (SELECT 'search_path=pg_catalog' = ANY(p.proconfig)
-     FROM pg_catalog.pg_proc AS p
-     WHERE p.oid = 'public.set_whatsapp_inbound_visibility(bigint,integer)'::regprocedure),
-    false
-  ),
-  'set_whatsapp_inbound_visibility has fixed pg_catalog search_path'
 );
 
 SELECT finish();

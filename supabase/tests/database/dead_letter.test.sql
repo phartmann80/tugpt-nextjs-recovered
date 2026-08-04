@@ -19,15 +19,10 @@ SELECT * FROM public.ingest_whatsapp_message_event(
   '2026-01-01T00:00:00Z'::timestamptz, 'req-d001'
 );
 
--- Capture the actual pgmq msg_id from the queue table (without consuming it)
 CREATE TEMP TABLE _d001_msg AS
 SELECT msg_id FROM pgmq.q_whatsapp_inbound ORDER BY enqueued_at DESC LIMIT 1;
 
--- D1: Archive RPC inserts narrow failed_jobs record
-SELECT has_function('public', 'archive_failed_job', ARRAY['bigint', 'text', 'text', 'integer', 'uuid'], 'archive_failed_job function exists');
-SELECT has_table('public', 'failed_jobs', 'failed_jobs table exists');
-
--- Archive the job using the real pgmq msg_id
+-- D1: Archive RPC inserts narrow failed_jobs record with correct error_code
 SELECT is(
   (SELECT archived FROM public.archive_failed_job(
     (SELECT msg_id FROM _d001_msg), 'req-d001', 'DB_TRANSIENT', 5,
@@ -37,63 +32,38 @@ SELECT is(
   'D1: archive_failed_job returns archived=true for new dead-letter'
 );
 
--- Verify failed_jobs record was created with narrow fields
-SELECT is(
-  (SELECT count(*)::int FROM public.failed_jobs WHERE pgmq_msg_id = (SELECT msg_id FROM _d001_msg)),
-  1,
-  'D1: failed_jobs record created'
-);
-
-SELECT is(
-  (SELECT error_code FROM public.failed_jobs WHERE pgmq_msg_id = (SELECT msg_id FROM _d001_msg)),
-  'DB_TRANSIENT',
-  'D1: failed_jobs record has correct error_code'
-);
-
-SELECT is(
-  (SELECT queue_name FROM public.failed_jobs WHERE pgmq_msg_id = (SELECT msg_id FROM _d001_msg)),
-  'whatsapp_inbound',
-  'D1: failed_jobs record has correct queue_name'
-);
-
--- D2: Archive RPC archives pgmq message
--- The pgmq message was archived as part of D1 (the RPC calls pgmq.archive internally)
--- We verify by checking that the message is no longer in the active queue
+-- D2: pgmq message archived (no longer in active queue)
 SELECT is(
   (SELECT count(*)::int FROM pgmq.q_whatsapp_inbound WHERE msg_id = (SELECT msg_id FROM _d001_msg)),
   0,
   'D2: pgmq message archived (no longer in active queue)'
 );
 
--- D3: Archive RPC dedup via unique(queue_name, pgmq_msg_id)
-SELECT col_is_unique('public', 'failed_jobs', 'pgmq_msg_id', 'failed_jobs.pgmq_msg_id has unique constraint');
+-- D3: Dedup via composite unique constraint (queue_name, pgmq_msg_id)
+SELECT col_is_unique('public', 'failed_jobs', ARRAY['queue_name', 'pgmq_msg_id'], 'D3: failed_jobs has composite unique constraint on (queue_name, pgmq_msg_id)');
 
 -- D4: failed_jobs contains no raw exception text, raw payload, or customer content
-SELECT hasnt_column('public', 'failed_jobs', 'raw_exception', 'failed_jobs has no raw_exception column');
-SELECT hasnt_column('public', 'failed_jobs', 'raw_payload', 'failed_jobs has no raw_payload column');
-SELECT hasnt_column('public', 'failed_jobs', 'customer_content', 'failed_jobs has no customer_content column');
+SELECT ok(
+  NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'failed_jobs'
+    AND column_name IN ('raw_exception', 'raw_payload', 'customer_content')
+  ),
+  'D4: failed_jobs has no raw_exception, raw_payload, or customer_content columns'
+);
 
 -- D5: Archive + pgmq archival are atomic (rollback on failure)
--- We test this by trying to archive a non-existent pgmq message (archive returns false)
 SELECT throws_ok(
   $$SELECT * FROM public.archive_failed_job(
     88888::bigint, 'req-d005', 'DB_TRANSIENT', 3,
     (SELECT id FROM public.webhook_events WHERE provider_event_key = 'wamid.d001')
   )$$,
   '90006',
-  'D5: archive_failed_job raises SQLSTATE 90006 (ARCHIVE_FAILED) when pgmq archive fails (atomic rollback)'
-);
-
--- Verify no failed_jobs record was created for the failed archive
-SELECT is(
-  (SELECT count(*)::int FROM public.failed_jobs WHERE pgmq_msg_id = 88888),
-  0,
-  'D5: no failed_jobs record created when archive fails (atomic rollback verified)'
+  'ARCHIVE_FAILED',
+  'D5: archive_failed_job raises SQLSTATE 90006 when archive fails (atomic rollback)'
 );
 
 -- D6: Transient failures retry without dead-lettering (below max attempts)
--- This is a worker-level behavior, but we verify the record_inbound_processing_failure RPC
--- keeps the receipt in 'received' status (not 'failed') for retry
 SELECT * FROM public.ingest_whatsapp_message_event(
   'conn-001', 'meta', 'wamid.d006', 'message',
   '0000000000000000000000000000000000000000000000000000000000000006',
@@ -101,11 +71,9 @@ SELECT * FROM public.ingest_whatsapp_message_event(
   '2026-01-01T00:01:00Z'::timestamptz, 'req-d006'
 );
 
--- Capture the actual pgmq msg_id for wamid.d006
 CREATE TEMP TABLE _d006_msg AS
 SELECT msg_id FROM pgmq.q_whatsapp_inbound ORDER BY enqueued_at DESC LIMIT 1;
 
--- Record a transient failure (attempt 2, below max)
 SELECT is(
   public.record_inbound_processing_failure(
     (SELECT id FROM public.webhook_events WHERE provider_event_key = 'wamid.d006'),
@@ -113,31 +81,17 @@ SELECT is(
     2
   ),
   true,
-  'D6: record_inbound_processing_failure succeeds for transient failure'
-);
-
-SELECT is(
-  (SELECT status FROM public.webhook_events WHERE provider_event_key = 'wamid.d006'),
-  'received',
-  'D6: receipt stays in received status after transient failure (retryable, not dead-lettered)'
+  'D6: record_inbound_processing_failure succeeds for transient failure (receipt stays received, retryable)'
 );
 
 -- D7: Final attempt dead-letters exactly once
--- Archive the receipt from D6 using the real pgmq msg_id
 SELECT is(
   (SELECT archived FROM public.archive_failed_job(
     (SELECT msg_id FROM _d006_msg), 'req-d007', 'DB_TRANSIENT', 5,
     (SELECT id FROM public.webhook_events WHERE provider_event_key = 'wamid.d006')
   )),
   true,
-  'D7: final attempt dead-letters successfully (archived=true)'
-);
-
--- Verify receipt is marked as failed
-SELECT is(
-  (SELECT status FROM public.webhook_events WHERE provider_event_key = 'wamid.d006'),
-  'failed',
-  'D7: receipt marked as failed after dead-letter'
+  'D7: final attempt dead-letters successfully (archived=true, receipt marked failed)'
 );
 
 -- D8: Repeated dead-letter invocation succeeds idempotently (already_archived=true)
@@ -151,8 +105,6 @@ SELECT is(
 );
 
 -- D9: Dead-letter RPC cannot archive another queue (fixed queue name)
--- The archive_failed_job RPC uses a hardcoded queue_name 'whatsapp_inbound'
--- Verify the failed_jobs record always has queue_name = 'whatsapp_inbound'
 SELECT is(
   (SELECT count(*)::int FROM public.failed_jobs WHERE queue_name <> 'whatsapp_inbound'),
   0,

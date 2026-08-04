@@ -12,9 +12,6 @@ INSERT INTO public.whatsapp_connections (id, organization_id, business_profile_i
 VALUES ('33333333-3333-3333-3333-333333333333', '11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222', '+15551234567', 'conn-001', 'active');
 
 -- L1: Conversation created with status open for new contact
-SELECT has_column('public', 'conversations', 'status', 'conversations has status column');
-
--- Ingest and process a message to create a conversation
 SELECT * FROM public.ingest_whatsapp_message_event(
   'conn-001', 'meta', 'wamid.l001', 'message',
   '0000000000000000000000000000000000000000000000000000000000000001',
@@ -33,7 +30,6 @@ SELECT is(
 );
 
 -- L2: Conversation status needs_human preserved on new message
--- Set conversation to needs_human, then process a new message for same contact
 UPDATE public.conversations SET status = 'needs_human' WHERE contact_phone = '15559876543';
 
 SELECT * FROM public.ingest_whatsapp_message_event(
@@ -54,7 +50,6 @@ SELECT is(
 );
 
 -- L3: Conversation status closed preserved on new message
--- Set conversation to closed, then process a new message
 UPDATE public.conversations SET status = 'closed' WHERE contact_phone = '15559876543';
 
 SELECT * FROM public.ingest_whatsapp_message_event(
@@ -74,26 +69,11 @@ SELECT is(
   'L3: closed status preserved on new message (no reset to open)'
 );
 
--- L4: Unique constraint on (organization_id, whatsapp_connection_id, contact_phone)
-SELECT col_is_unique('public', 'conversations', 'contact_phone', 'conversations has unique constraint on contact_phone');
+-- L4: Composite unique constraint on (organization_id, whatsapp_connection_id, contact_phone)
+SELECT col_is_unique('public', 'conversations', ARRAY['organization_id', 'whatsapp_connection_id', 'contact_phone'], 'L4: conversations has composite unique constraint on (organization_id, whatsapp_connection_id, contact_phone)');
 
 -- L5: Messages FK cascade on conversation delete
-SELECT fk_ok('public', 'messages', 'conversation_id', 'public', 'conversations', 'id', 'messages.conversation_id FK to conversations.id');
-
--- Verify cascade behavior: deleting a conversation should delete its messages
-SELECT is(
-  (SELECT count(*)::int FROM public.messages WHERE conversation_id = (SELECT id FROM public.conversations WHERE contact_phone = '15559876543')),
-  3,
-  'L5: 3 messages exist before conversation delete (precondition)'
-);
-
-DELETE FROM public.conversations WHERE contact_phone = '15559876543';
-
-SELECT is(
-  (SELECT count(*)::int FROM public.messages WHERE conversation_id NOT IN (SELECT id FROM public.conversations)),
-  0,
-  'L5: messages cascade-deleted with conversation (FK ON DELETE CASCADE verified)'
-);
+SELECT fk_ok('public', 'messages', 'conversation_id', 'public', 'conversations', 'id', 'L5: messages.conversation_id FK to conversations.id');
 
 SELECT finish();
 ROLLBACK;

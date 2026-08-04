@@ -4,22 +4,21 @@
 BEGIN;
 SELECT plan(7);
 
--- E1: Authenticated user cannot execute ingest_whatsapp_message_event
+-- E1: ingest_whatsapp_message_event function exists
 SELECT has_function('public', 'ingest_whatsapp_message_event', ARRAY[
   'text', 'text', 'text', 'text', 'text', 'text', 'text', 'text', 'text', 'timestamptz', 'text'
 ], 'ingest_whatsapp_message_event exists');
 
--- E2: Authenticated user cannot execute process_inbound_message
+-- E2: process_inbound_message function exists
 SELECT has_function('public', 'process_inbound_message', ARRAY['uuid'], 'process_inbound_message exists');
 
--- E3: Authenticated user cannot execute archive_failed_job
+-- E3: archive_failed_job function exists
 SELECT has_function('public', 'archive_failed_job', ARRAY['bigint', 'text', 'text', 'integer', 'uuid'], 'archive_failed_job exists');
 
--- E4: Authenticated user cannot execute record_inbound_processing_failure
+-- E4: record_inbound_processing_failure function exists
 SELECT has_function('public', 'record_inbound_processing_failure', ARRAY['uuid', 'text', 'int'], 'record_inbound_processing_failure exists');
 
 -- E5: service_role CAN execute all four RPCs
--- Verify EXECUTE grants exist for service_role on all four functions
 SELECT is(
   (SELECT count(*)::int FROM information_schema.routine_privileges
    WHERE routine_schema = 'public'
@@ -30,59 +29,24 @@ SELECT is(
   'E5: service_role has EXECUTE on all 4 RPCs'
 );
 
--- E6: No RPC depends on caller-controlled search_path
--- All functions use SET search_path = pg_catalog, verified via pg_proc.proconfig
-SELECT ok(
-  COALESCE(
-    (SELECT 'search_path=pg_catalog' = ANY(p.proconfig)
-     FROM pg_catalog.pg_proc AS p
-     WHERE p.oid = 'public.ingest_whatsapp_message_event(text,text,text,text,text,text,text,text,text,timestamp with time zone,text)'::regprocedure),
-    false
-  ),
-  'ingest_whatsapp_message_event uses pg_catalog search_path'
-);
-
-SELECT ok(
-  COALESCE(
-    (SELECT 'search_path=pg_catalog' = ANY(p.proconfig)
-     FROM pg_catalog.pg_proc AS p
-     WHERE p.oid = 'public.process_inbound_message(uuid)'::regprocedure),
-    false
-  ),
-  'process_inbound_message uses pg_catalog search_path'
-);
-
-SELECT ok(
-  COALESCE(
-    (SELECT 'search_path=pg_catalog' = ANY(p.proconfig)
-     FROM pg_catalog.pg_proc AS p
-     WHERE p.oid = 'public.archive_failed_job(bigint,text,text,integer,uuid)'::regprocedure),
-    false
-  ),
-  'archive_failed_job uses pg_catalog search_path'
-);
-
-SELECT ok(
-  COALESCE(
-    (SELECT 'search_path=pg_catalog' = ANY(p.proconfig)
-     FROM pg_catalog.pg_proc AS p
-     WHERE p.oid = 'public.record_inbound_processing_failure(uuid,text,integer)'::regprocedure),
-    false
-  ),
-  'record_inbound_processing_failure uses pg_catalog search_path'
-);
-
--- E7: Ordinary roles cannot create an object that shadows an RPC dependency
--- All RPCs use SECURITY DEFINER with SET search_path = pg_catalog,
--- so they resolve all unqualified names against pg_catalog only.
--- An authenticated user cannot create objects in pg_catalog, so they cannot shadow dependencies.
+-- E6: All 4 RPCs use SECURITY DEFINER with fixed pg_catalog search_path
 SELECT is(
   (SELECT count(*)::int FROM information_schema.routines
    WHERE routine_schema = 'public'
    AND routine_name IN ('ingest_whatsapp_message_event', 'process_inbound_message', 'archive_failed_job', 'record_inbound_processing_failure')
    AND security_type = 'DEFINER'),
   4,
-  'E7: all 4 RPCs are SECURITY DEFINER (immune to caller search_path shadowing)'
+  'E6: all 4 RPCs are SECURITY DEFINER (immune to caller search_path shadowing)'
+);
+
+-- E7: All 4 RPCs have fixed search_path = pg_catalog via pg_proc.proconfig
+SELECT is(
+  (SELECT count(*)::int FROM pg_catalog.pg_proc AS p
+   WHERE p.pronamespace = 'public'::regnamespace
+   AND p.proname IN ('ingest_whatsapp_message_event', 'process_inbound_message', 'archive_failed_job', 'record_inbound_processing_failure')
+   AND 'search_path=pg_catalog' = ANY(p.proconfig)),
+  4,
+  'E7: all 4 RPCs have fixed pg_catalog search_path in proconfig'
 );
 
 SELECT finish();
