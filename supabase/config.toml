@@ -5,7 +5,7 @@ project_id = "tugpt-ai"
 enabled = true
 port = 56321
 schemas = ["public", "storage", "graphql_public"]
-extra_search_path = ["public", "extensions"]
+extra_search_path = ["public", "extensions", "pgmq"]
 max_rows = 1000
 
 [db]

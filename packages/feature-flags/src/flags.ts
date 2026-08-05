@@ -16,7 +16,7 @@ export class FeatureFlagService {
 
   constructor() {
     // Default system flags
-    this.flags.set('whatsapp_integration', { isEnabled: true });
+    this.flags.set('whatsapp_integration', { isEnabled: false });
     this.flags.set('voice_receptionist', { isEnabled: true });
     this.flags.set('langdock_orchestrator', { isEnabled: true });
     this.flags.set('mastra_orchestrator', { isEnabled: true });

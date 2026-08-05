@@ -14,6 +14,17 @@ export interface BaseJobPayload {
   timestamp: string;
 }
 
+/**
+ * Minimal queue payload for whatsapp_inbound jobs.
+ * Contains ONLY: webhookEventId, requestId, timestamp.
+ * Worker derives org and connection context from the trusted database receipt.
+ */
+export interface WhatsAppInboundPayload {
+  webhookEventId: string;
+  requestId: string | null;
+  timestamp: string;
+}
+
 export interface JobDefinition<TPayload extends BaseJobPayload = BaseJobPayload> {
   id: string;
   type: JobType;
