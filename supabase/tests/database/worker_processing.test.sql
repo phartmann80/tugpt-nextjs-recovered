@@ -124,15 +124,35 @@ SELECT * FROM public.ingest_whatsapp_message_event(
   '2026-01-01T00:04:00Z'::timestamptz, 'req-p009'
 );
 
-SELECT is(
+-- Capture RPC results in a temp table to avoid same-statement visibility issues
+-- between mutating function calls and table-reading subqueries.
+CREATE TEMP TABLE failure_call_results (
+  test_step text PRIMARY KEY,
+  rpc_result boolean NOT NULL
+) ON COMMIT DROP;
+
+INSERT INTO failure_call_results (test_step, rpc_result)
+VALUES (
+  'attempt_2',
   public.record_inbound_processing_failure(
     (SELECT id FROM public.webhook_events WHERE provider_event_key = 'wamid.p009'),
     'DB_TRANSIENT',
     2
   )
-  AND (SELECT attempt_count FROM public.webhook_events WHERE provider_event_key = 'wamid.p009') = 2,
-  true,
-  'P9: record_inbound_processing_failure returns true and attempt_count updated to 2 on received receipt'
+);
+
+SELECT ok(
+  (
+    SELECT rpc_result
+    FROM failure_call_results
+    WHERE test_step = 'attempt_2'
+  ) IS TRUE
+  AND (
+    SELECT attempt_count = 2
+    FROM public.webhook_events
+    WHERE provider_event_key = 'wamid.p009'
+  ),
+  'P9: record_inbound_processing_failure returns true and attempt_count updates to 2 on received receipt'
 );
 
 -- P10: Redelivery after processing but before acknowledgment is safe
@@ -145,26 +165,52 @@ SELECT is(
 );
 
 -- P11: Retry attempt state persists after processing error
-SELECT is(
+INSERT INTO failure_call_results (test_step, rpc_result)
+VALUES (
+  'attempt_3',
   public.record_inbound_processing_failure(
     (SELECT id FROM public.webhook_events WHERE provider_event_key = 'wamid.p009'),
     'DB_TRANSIENT',
     3
   )
-  AND (SELECT attempt_count FROM public.webhook_events WHERE provider_event_key = 'wamid.p009') = 3,
-  true,
+);
+
+SELECT ok(
+  (
+    SELECT rpc_result
+    FROM failure_call_results
+    WHERE test_step = 'attempt_3'
+  ) IS TRUE
+  AND (
+    SELECT attempt_count = 3
+    FROM public.webhook_events
+    WHERE provider_event_key = 'wamid.p009'
+  ),
   'P11: second failure recording succeeds and attempt_count persists at 3 on received receipt'
 );
 
 -- P12: Attempt count cannot move backward (monotonic)
-SELECT is(
+INSERT INTO failure_call_results (test_step, rpc_result)
+VALUES (
+  'attempt_1',
   public.record_inbound_processing_failure(
     (SELECT id FROM public.webhook_events WHERE provider_event_key = 'wamid.p009'),
     'DB_TRANSIENT',
     1
   )
-  AND (SELECT attempt_count FROM public.webhook_events WHERE provider_event_key = 'wamid.p009') = 3,
-  true,
+);
+
+SELECT ok(
+  (
+    SELECT rpc_result
+    FROM failure_call_results
+    WHERE test_step = 'attempt_1'
+  ) IS TRUE
+  AND (
+    SELECT attempt_count = 3
+    FROM public.webhook_events
+    WHERE provider_event_key = 'wamid.p009'
+  ),
   'P12: lower attempt_count does not reduce stored value (GREATEST keeps 3, monotonic protection)'
 );
 
