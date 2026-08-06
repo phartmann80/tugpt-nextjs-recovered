@@ -456,4 +456,127 @@ describe('DraftWorker', () => {
     // No business instructions in payload
     expect(JSON.stringify(payload)).not.toContain('business_instructions');
   });
+
+  // T43: No worker path calls archive with an unsupported error code.
+  // All archive_draft_failed_job calls must use only approved codes from
+  // the failed_jobs_error_code_check constraint allowlist.
+  it('never archives with an unsupported error code', async () => {
+    const APPROVED_CODES = new Set([
+      'DRAFT_PROVIDER_AUTH_ERROR',
+      'DRAFT_PROVIDER_CONFIG_ERROR',
+      'DRAFT_MALFORMED_RESPONSE',
+      'DRAFT_EXHAUSTED_RETRIES',
+      'DRAFT_INVALID_REQUEST',
+      'DRAFT_PROVIDER_EMPTY_OUTPUT',
+      'DRAFT_PROVIDER_OUTPUT_TOO_LONG',
+      'DRAFT_INVALID_CONFIG',
+    ]);
+
+    const UNSUPPORTED_CODES = [
+      'DRAFT_PROVIDER_ERROR',
+      'DRAFT_GENERATION_TIMEOUT',
+      'DRAFT_QUOTA_EXCEEDED',
+      'DRAFT_INTERNAL_ERROR',
+    ];
+
+    // Test all permanent failure scenarios that archive
+    const permanentBehaviors: Array<{ behavior: 'fail-permanent' | 'fail-empty' | 'fail-oversized' }> = [
+      { behavior: 'fail-permanent' },
+      { behavior: 'fail-empty' },
+      { behavior: 'fail-oversized' },
+    ];
+
+    for (const { behavior } of permanentBehaviors) {
+      const rpcConfig: MockRpcConfig = {
+        is_feature_enabled: { data: true, error: null },
+        reserve_draft_usage: { data: { status: 'NEWLY_RESERVED', reason: null }, error: null },
+        archive_draft_failed_job: { data: { archived: true, already_archived: false }, error: null },
+      };
+      const queryConfig: MockQueryConfig = {
+        draft_generation_jobs: {
+          filters: { id: MOCK_JOB_ID },
+          data: MOCK_JOB_ROW,
+        },
+        messages: {
+          filters: { id: MOCK_SOURCE_MESSAGE_ID },
+          data: { body: MOCK_SOURCE_TEXT },
+        },
+        ai_draft_configs: {
+          filters: { business_profile_id: MOCK_BUSINESS_PROFILE_ID },
+          data: MOCK_DRAFT_CONFIG,
+        },
+      };
+      const client = createMockClient(rpcConfig, queryConfig);
+      const orchestrator = createMockOrchestrator(behavior);
+      const worker = new DraftWorker(client, orchestrator as unknown as { generateDraft: (req: unknown) => Promise<unknown> }, {
+        pollIntervalMs: 100,
+        visibilityTimeoutSeconds: 30,
+      });
+
+      await (worker as unknown as { processJob: (job: unknown) => Promise<void> }).processJob(MOCK_QUEUE_MESSAGE);
+
+      const rpcCalls = (client as unknown as { rpc: { mock: { calls: unknown[] } } }).rpc.mock.calls;
+      const archiveCall = rpcCalls.find((c: unknown[]) => c[0] === 'archive_draft_failed_job');
+      expect(archiveCall).toBeDefined();
+      const code = archiveCall[1].p_error_code as string;
+      expect(APPROVED_CODES.has(code)).toBe(true);
+      expect(UNSUPPORTED_CODES.includes(code)).toBe(false);
+    }
+
+    // Test transient failure at attempt 3 (archives with DRAFT_EXHAUSTED_RETRIES)
+    const transientRpcConfig: MockRpcConfig = {
+      is_feature_enabled: { data: true, error: null },
+      reserve_draft_usage: { data: { status: 'NEWLY_RESERVED', reason: null }, error: null },
+      archive_draft_failed_job: { data: { archived: true, already_archived: false }, error: null },
+    };
+    const transientQueryConfig: MockQueryConfig = {
+      draft_generation_jobs: {
+        filters: { id: MOCK_JOB_ID },
+        data: MOCK_JOB_ROW,
+      },
+      messages: {
+        filters: { id: MOCK_SOURCE_MESSAGE_ID },
+        data: { body: MOCK_SOURCE_TEXT },
+      },
+      ai_draft_configs: {
+        filters: { business_profile_id: MOCK_BUSINESS_PROFILE_ID },
+        data: MOCK_DRAFT_CONFIG,
+      },
+    };
+    const transientClient = createMockClient(transientRpcConfig, transientQueryConfig);
+    const transientOrchestrator = createMockOrchestrator('fail-transient');
+    const transientWorker = new DraftWorker(transientClient, transientOrchestrator as unknown as { generateDraft: (req: unknown) => Promise<unknown> }, {
+      pollIntervalMs: 100,
+      visibilityTimeoutSeconds: 30,
+    });
+
+    const transientMsg = { ...MOCK_QUEUE_MESSAGE, readCt: 3 };
+    await (transientWorker as unknown as { processJob: (job: unknown) => Promise<void> }).processJob(transientMsg);
+
+    const transientRpcCalls = (transientClient as unknown as { rpc: { mock: { calls: unknown[] } } }).rpc.mock.calls;
+    const transientArchiveCall = transientRpcCalls.find((c: unknown[]) => c[0] === 'archive_draft_failed_job');
+    expect(transientArchiveCall).toBeDefined();
+    expect(transientArchiveCall[1].p_error_code).toBe('DRAFT_EXHAUSTED_RETRIES');
+    expect(APPROVED_CODES.has('DRAFT_EXHAUSTED_RETRIES')).toBe(true);
+
+    // Test malformed payload (archives with DRAFT_INVALID_REQUEST)
+    const malformedRpcConfig: MockRpcConfig = {
+      archive_draft_failed_job: { data: { archived: true, already_archived: false }, error: null },
+    };
+    const malformedClient = createMockClient(malformedRpcConfig, {});
+    const malformedOrchestrator = createMockOrchestrator('success');
+    const malformedWorker = new DraftWorker(malformedClient, malformedOrchestrator as unknown as { generateDraft: (req: unknown) => Promise<unknown> }, {
+      pollIntervalMs: 100,
+      visibilityTimeoutSeconds: 30,
+    });
+
+    const malformedMsg = { ...MOCK_QUEUE_MESSAGE, payload: { requestId: 'test', timestamp: '2026-08-06T18:00:00.000Z' } };
+    await (malformedWorker as unknown as { processJob: (job: unknown) => Promise<void> }).processJob(malformedMsg);
+
+    const malformedRpcCalls = (malformedClient as unknown as { rpc: { mock: { calls: unknown[] } } }).rpc.mock.calls;
+    const malformedArchiveCall = malformedRpcCalls.find((c: unknown[]) => c[0] === 'archive_draft_failed_job');
+    expect(malformedArchiveCall).toBeDefined();
+    expect(malformedArchiveCall[1].p_error_code).toBe('DRAFT_INVALID_REQUEST');
+    expect(APPROVED_CODES.has('DRAFT_INVALID_REQUEST')).toBe(true);
+  });
 });

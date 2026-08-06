@@ -30,7 +30,7 @@ DECLARE
   v_status TEXT;
   v_reason TEXT;
 BEGIN
-  SELECT status, reason INTO v_status, v_reason
+  SELECT * INTO v_status, v_reason
   FROM private.reserve_draft_usage(p_draft_generation_job_id);
 
   RETURN QUERY SELECT v_status, v_reason;

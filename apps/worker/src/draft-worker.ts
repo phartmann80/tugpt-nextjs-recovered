@@ -19,7 +19,7 @@ import { DraftPgmqAdapter } from './draft-queue-adapter.js';
 import { DraftOrchestrator } from '@tugpt/ai-orchestration';
 import type { DraftRequest, DraftConfig } from '@tugpt/ai-orchestration';
 import type { ProviderErrorCategory } from '@tugpt/ai-providers';
-import { mapProviderErrorToDbCode, type DraftErrorCode } from './draft-rpc-error-codes.js';
+import { mapProviderErrorToDbCode, isTransientCategory, type DraftErrorCode } from './draft-rpc-error-codes.js';
 
 /** Retry visibility delays per Paul's amendment #7. */
 const RETRY_DELAY_1 = 5;   // read_ct = 1 failure → 5 seconds
@@ -105,7 +105,7 @@ export class DraftWorker {
       logger.error('Malformed queue payload: missing draftGenerationJobId', undefined, {
         queueMessageId: msgId.toString(),
       });
-      await this.archiveFailed(msgId, draftGenerationJobId, 'DRAFT_INTERNAL_ERROR');
+      await this.archiveFailed(msgId, draftGenerationJobId, 'DRAFT_INVALID_REQUEST');
       return;
     }
 
@@ -123,7 +123,7 @@ export class DraftWorker {
         logger.error('Draft job not found in database', undefined, {
           draftGenerationJobId,
         });
-        await this.archiveFailed(msgId, draftGenerationJobId, 'DRAFT_INTERNAL_ERROR');
+        await this.archiveFailed(msgId, draftGenerationJobId, 'DRAFT_INVALID_REQUEST');
         return;
       }
 
@@ -247,33 +247,29 @@ export class DraftWorker {
     readCt: number,
     errorCategory: ProviderErrorCategory
   ): Promise<void> {
-    const dbErrorCode = mapProviderErrorToDbCode(errorCategory);
+    const isTransient = isTransientCategory(errorCategory);
 
     logger.info('Provider failure', {
       draftGenerationJobId,
       requestId,
       attempt: readCt,
       errorCategory,
-      dbErrorCode,
+      isTransient,
     });
 
-    // Determine if this is a transient (fallback-eligible) or permanent failure.
-    // Transient failures retry via PGMQ visibility timeout.
-    // Permanent failures (fallback-prohibited) archive immediately.
-    const isTransient =
-      errorCategory === 'NETWORK_FAILURE' ||
-      errorCategory === 'TIMEOUT' ||
-      errorCategory === 'HTTP_408' ||
-      errorCategory === 'HTTP_429' ||
-      errorCategory === 'HTTP_5XX';
-
     if (isTransient && readCt < 3) {
-      // Transient failure, attempts remaining: retry via visibility timeout
+      // Transient failure, attempts remaining: retry via visibility timeout.
+      // Do NOT insert failed_jobs. Do NOT archive.
       const delay = readCt === 1 ? RETRY_DELAY_1 : RETRY_DELAY_2;
       await this.queue.setVisibility(msgId, delay);
+    } else if (isTransient && readCt >= 3) {
+      // Third transient failure: retries exhausted, archive immediately.
+      // The only approved code for exhausted transient retries.
+      await this.archiveFailed(msgId, draftGenerationJobId, 'DRAFT_EXHAUSTED_RETRIES');
     } else {
-      // Permanent failure OR third transient failure: archive immediately
-      const archiveCode = isTransient ? 'DRAFT_EXHAUSTED_RETRIES' as DraftErrorCode : dbErrorCode;
+      // Permanent failure (fallback-prohibited): archive immediately
+      // with the mapped approved error code.
+      const archiveCode = mapProviderErrorToDbCode(errorCategory);
       await this.archiveFailed(msgId, draftGenerationJobId, archiveCode);
     }
   }
