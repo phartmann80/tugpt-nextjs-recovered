@@ -1,11 +1,11 @@
 # TuGPT.ai
 
-AI-powered platform built with Next.js 16, React 19, and Supabase. Currently in Phase 2 (Identity, Auth & Multi-Tenant Foundation), with Phase 3A development planned.
+AI-powered platform built with Next.js 16, React 19, and Supabase. Phase 3A (Secure Inbound WhatsApp Foundation) is complete and merged. Phase 3B (AI Draft Generation) is in progress.
 
 ## Tech Stack
 
 | Layer | Technology |
-|-------|-----------|
+|-------|------------|
 | Package manager | pnpm 10.34+ |
 | Monorepo orchestration | Turborepo |
 | Web framework | Next.js 16 (App Router) |
@@ -21,24 +21,24 @@ AI-powered platform built with Next.js 16, React 19, and Supabase. Currently in 
 ```
 tugpt-nextjs-recovered/
 ├── apps/
-│   └── web/                    # Next.js application
+│   └── web/                        # Next.js application
 ├── packages/
-│   ├── ai-providers/           # AI provider adapter pattern (OpenAI, Langdock, Mastra)
-│   ├── auth/                   # Supabase auth service & session management
-│   ├── database/               # Supabase client, migrations, RLS policies
-│   ├── feature-flags/          # Feature flag architecture
-│   ├── jobs/                   # Background job abstraction
-│   ├── observability/          # Structured logger, metrics collector, audit logging
-│   └── security/              # Config validation, secret sanitization
+│   ├── ai-providers/               # AI provider adapter pattern (OpenAI, Langdock, Mastra)
+│   ├── auth/                       # Supabase auth service & session management
+│   ├── database/                   # Supabase client, migrations, RLS policies
+│   ├── feature-flags/              # Feature flag architecture
+│   ├── jobs/                       # Background job abstraction
+│   ├── observability/              # Structured logger, metrics collector, audit logging
+│   └── security/                   # Config validation, secret sanitization
 ├── supabase/
-│   ├── migrations/             # SQL migrations (RLS, triggers, audit tables)
-│   └── tests/                  # pgTAP test suites (RLS adversarial, invitations & ownership)
+│   ├── migrations/                 # SQL migrations (RLS, triggers, audit tables)
+│   └── tests/                      # pgTAP test suites (RLS adversarial, invocations & ownership)
 ├── docs/
-│   ├── adr/                    # Architecture Decision Records (ADR-001 to ADR-010)
-│   ├── status/                 # Phase status reports
-│   └── production_environment.md
-├── turbo.json
-├── pnpm-workspace.yaml
+│   ├── adr/                        # Architecture Decision Records (ADR-001 to ADR-010)
+│   ├── status/                     # Phase status reports
+│   ├── production_environment.md
+│   ├── turbo.json
+│   └── pnpm-workspace.yaml
 └── eslint.config.mjs
 ```
 
@@ -101,9 +101,9 @@ pnpm exec supabase test db
 
 ```bash
 pnpm exec turbo build        # Production build
-pnpm exec turbo lint         # ESLint (8/8 packages)
-pnpm exec turbo typecheck    # TypeScript (8/8 packages)
-pnpm exec turbo test         # Vitest (45 assertions across 7 files)
+pnpm exec turbo lint          # ESLint (8/8 packages)
+pnpm exec turbo typecheck     # TypeScript (8/8 packages)
+pnpm exec turbo test          # Vitest
 ```
 
 All four must pass before merge. The Turbo cache is disabled for `dev` and persisted for `build`.
@@ -117,7 +117,7 @@ The release gate (PR #1, merged) established the following pipeline:
 3. `turbo run typecheck --force`
 4. `turbo run test --force`
 5. `turbo run build --force`
-6. `supabase db reset` + `supabase test db` (pgTAP: 2 files, 45 tests)
+6. `supabase db reset` + `supabase test db` (pgTAP)
 
 All checks must pass. No manual SQL modifications to production schema; all changes go through migrations (`supabase db push`).
 
@@ -147,8 +147,8 @@ All checks must pass. No manual SQL modifications to production schema; all chan
 ## Current Status
 
 - **Phase 2**: Complete. Release gate passed (lint, typecheck, test, build, pgTAP all green). Merged via PR #1.
-- **Open PRs**: [PR #2](https://github.com/phartmann80/tugpt-nextjs-recovered/pull/2) — fix(observability): sanitize error messages to prevent secret leakage in logs.
-- **Phase 3A**: Not started. See `docs/status/PHASE_2_RELEASE_GATE.md` for the full release gate evidence.
+- **Phase 3A** (Secure Inbound WhatsApp Foundation): Complete. Merged via commit `4c6551dd` on Aug 5, 2026. Local Docker gate passed: 131 application tests, 133 pgTAP assertions, production build, and typed SQLSTATE transport check all green.
+- **Phase 3B** (AI Draft Generation): In progress. Database layer implemented on a feature branch. See `docs/status/` for details as they become available.
 
 ## Contributing
 
