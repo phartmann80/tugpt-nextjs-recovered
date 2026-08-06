@@ -388,15 +388,17 @@ SELECT throws_ok(
 );
 
 -- =============================================================================
--- TEST 25: Feature Flags: System-scoped flags visible to members
+-- TEST 25: Feature Flags: System-scoped flags NOT visible to members
+-- Phase 3B security-contract update: global feature-flag rows are service-role-only.
+-- Authenticated users may read only organization-scoped flags for their own org.
 -- =============================================================================
 SELECT set_config('request.jwt.claims', '{"sub":"55555555-5555-5555-5555-555555555555","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 
 SELECT is(
-  (SELECT is_enabled FROM public.feature_flags WHERE organization_id IS NULL AND key = 'global_beta_feature'),
-  true,
-  'Test 25: Members can view system feature flags'
+  (SELECT COUNT(*)::int FROM public.feature_flags WHERE organization_id IS NULL AND key = 'global_beta_feature'),
+  0,
+  'Test 25: Authenticated member cannot read global feature-flag rows'
 );
 
 -- =============================================================================
