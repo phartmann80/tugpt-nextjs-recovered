@@ -1,10 +1,12 @@
 # Phase 3A: Secure Inbound WhatsApp Foundation
 
 ## Status
-Implementation authorized by jp on Aug 4, 2026.
+**Complete and merged** on Aug 5, 2026 (commit `4c6551dd`).
+
+Implementation authorized by jp on Aug 4, 2026. Local Docker gate passed: 131 application tests, 133 pgTAP assertions, production build, and typed SQLSTATE transport check all green. Merged to main by Paul Hartmann.
 
 ## Branch
-`feature/phase3a-secure-inbound-foundation` at `8130a038eee9d1993f11a88c22928384c5fdaf09`
+`feature/phase3a-secure-inbound-foundation` at `8130a038eee9d1993f11a88c22928384c5fdaf09` (merged)
 
 ## Scope
 41 new files, 14 modified files. No AI, no outbound WhatsApp, no production deployment.
@@ -77,7 +79,7 @@ Implementation authorized by jp on Aug 4, 2026.
 - `packages/jobs/src/index.ts`
 - `packages/jobs/src/types.ts`
 - `packages/jobs/package.json`
-- `packages/feature-flags/src/flags.ts`
+- `packages/feature-flags/src/flags.test.ts`
 - `packages/database/src/types.ts`
 - `packages/database/src/index.ts`
 - `.env.example`
