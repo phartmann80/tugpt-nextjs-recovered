@@ -102,6 +102,12 @@ importers:
       '@supabase/supabase-js':
         specifier: ^2.49.1
         version: 2.110.7
+      '@tugpt/ai-orchestration':
+        specifier: workspace:*
+        version: link:../../packages/ai-orchestration
+      '@tugpt/ai-providers':
+        specifier: workspace:*
+        version: link:../../packages/ai-providers
       '@tugpt/database':
         specifier: workspace:*
         version: link:../../packages/database
@@ -118,6 +124,25 @@ importers:
       tsx:
         specifier: ^4
         version: 4.23.5
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@20.19.43)(vite@8.1.5(@types/node@20.19.43)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5))
+
+  packages/ai-orchestration:
+    dependencies:
+      '@tugpt/ai-providers':
+        specifier: workspace:*
+        version: link:../ai-providers
+      '@tugpt/observability':
+        specifier: workspace:*
+        version: link:../observability
+    devDependencies:
+      '@types/node':
+        specifier: ^20
+        version: 20.19.43
       typescript:
         specifier: ^5
         version: 5.9.3
