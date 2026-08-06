@@ -65,6 +65,111 @@ export interface FeatureFlag {
   updated_at: string;
 }
 
+// Phase 3B types
+
+export interface AiDraftConfig {
+  id: string;
+  organization_id: string;
+  business_profile_id: string;
+  business_instructions: string;
+  personality: string;
+  response_rules: string;
+  tone: string;
+  max_draft_length: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AiDraft {
+  id: string;
+  organization_id: string;
+  business_profile_id: string;
+  conversation_id: string;
+  source_message_id: string;
+  current_revision_id: string | null;
+  status: 'draft' | 'approved' | 'rejected';
+  version: number;
+  provider: string | null;
+  model: string | null;
+  created_at: string;
+  updated_at: string;
+  reviewed_at: string | null;
+  reviewed_by: string | null;
+  rejected_at: string | null;
+  rejected_by: string | null;
+}
+
+export interface AiDraftRevision {
+  id: string;
+  organization_id: string;
+  draft_id: string;
+  version: number;
+  body: string;
+  created_by_type: 'system' | 'user';
+  created_by_user_id: string | null;
+  created_at: string;
+}
+
+export interface AiDraftReviewEvent {
+  id: string;
+  organization_id: string;
+  draft_id: string;
+  action: 'approve' | 'edit' | 'reject';
+  actor_id: string;
+  previous_version: number;
+  new_version: number;
+  created_at: string;
+}
+
+export interface DraftGenerationJob {
+  id: string;
+  organization_id: string;
+  business_profile_id: string;
+  conversation_id: string;
+  source_message_id: string;
+  draft_id: string | null;
+  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'archived';
+  provider: string | null;
+  model: string | null;
+  attempt_count: number;
+  error_code: string | null;
+  pgmq_msg_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DraftQuotaLimit {
+  id: string;
+  organization_id: string;
+  period_start: string;
+  period_end: string;
+  hard_ceiling: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DraftUsageTracking {
+  id: string;
+  organization_id: string;
+  quota_limit_id: string;
+  period_start: string;
+  period_end: string;
+  draft_count: number;
+  reserved_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DraftUsageReservation {
+  id: string;
+  organization_id: string;
+  draft_generation_job_id: string;
+  quota_limit_id: string | null;
+  status: 'reserved' | 'consumed' | 'released';
+  created_at: string;
+  updated_at: string;
+}
+
 // Phase 3A types
 
 export interface BusinessProfile {
@@ -216,6 +321,46 @@ export interface Database {
         Insert: Omit<FailedJob, 'id' | 'created_at'> & { id?: string; created_at?: string };
         Update: Partial<FailedJob>;
       };
+      ai_draft_configs: {
+        Row: AiDraftConfig;
+        Insert: Omit<AiDraftConfig, 'id' | 'created_at' | 'updated_at'> & { id?: string; created_at?: string; updated_at?: string };
+        Update: Partial<AiDraftConfig>;
+      };
+      ai_drafts: {
+        Row: AiDraft;
+        Insert: Omit<AiDraft, 'id' | 'created_at' | 'updated_at'> & { id?: string; created_at?: string; updated_at?: string };
+        Update: Partial<AiDraft>;
+      };
+      ai_draft_revisions: {
+        Row: AiDraftRevision;
+        Insert: Omit<AiDraftRevision, 'id' | 'created_at'> & { id?: string; created_at?: string };
+        Update: Partial<AiDraftRevision>;
+      };
+      ai_draft_review_events: {
+        Row: AiDraftReviewEvent;
+        Insert: Omit<AiDraftReviewEvent, 'id' | 'created_at'> & { id?: string; created_at?: string };
+        Update: Partial<AiDraftReviewEvent>;
+      };
+      draft_generation_jobs: {
+        Row: DraftGenerationJob;
+        Insert: Omit<DraftGenerationJob, 'id' | 'created_at' | 'updated_at'> & { id?: string; created_at?: string; updated_at?: string };
+        Update: Partial<DraftGenerationJob>;
+      };
+      draft_quota_limits: {
+        Row: DraftQuotaLimit;
+        Insert: Omit<DraftQuotaLimit, 'id' | 'created_at' | 'updated_at'> & { id?: string; created_at?: string; updated_at?: string };
+        Update: Partial<DraftQuotaLimit>;
+      };
+      draft_usage_tracking: {
+        Row: DraftUsageTracking;
+        Insert: Omit<DraftUsageTracking, 'id' | 'created_at' | 'updated_at'> & { id?: string; created_at?: string; updated_at?: string };
+        Update: Partial<DraftUsageTracking>;
+      };
+      draft_usage_reservations: {
+        Row: DraftUsageReservation;
+        Insert: Omit<DraftUsageReservation, 'id' | 'created_at' | 'updated_at'> & { id?: string; created_at?: string; updated_at?: string };
+        Update: Partial<DraftUsageReservation>;
+      };
     };
     Views: {
       [_ in never]: never;
@@ -297,6 +442,52 @@ export interface Database {
         Args: {
           p_msg_id: string;
           p_visibility_timeout_seconds: number;
+        };
+        Returns: boolean;
+      };
+      approve_draft: {
+        Args: {
+          p_draft_id: string;
+          p_expected_lock_version: number;
+        };
+        Returns: {
+          id: string;
+          status: string;
+          version: number;
+          reviewed_at: string | null;
+          reviewed_by: string | null;
+        };
+      };
+      edit_draft: {
+        Args: {
+          p_draft_id: string;
+          p_expected_lock_version: number;
+          p_body: string;
+        };
+        Returns: {
+          id: string;
+          status: string;
+          version: number;
+          current_revision_id: string | null;
+        };
+      };
+      reject_draft: {
+        Args: {
+          p_draft_id: string;
+          p_expected_lock_version: number;
+        };
+        Returns: {
+          id: string;
+          status: string;
+          version: number;
+          rejected_at: string | null;
+          rejected_by: string | null;
+        };
+      };
+      is_feature_enabled: {
+        Args: {
+          p_organization_id: string;
+          p_flag_key: string;
         };
         Returns: boolean;
       };
