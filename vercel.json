@@ -1,0 +1,4 @@
+{
+  "$schema": "https://vercel.sh/schema.json",
+  "installCommand": "pnpm install --frozen-lockfile"
+}
