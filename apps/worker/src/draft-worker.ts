@@ -33,23 +33,51 @@ export interface DraftWorkerConfig {
   visibilityTimeoutSeconds: number;
 }
 
+/**
+ * Factory function that lazily constructs the DraftOrchestrator.
+ * Called only when the worker reaches the provider-generation path
+ * (feature flag enabled). This allows the worker to start and poll
+ * safely without any provider credentials while ai_draft_generation
+ * is disabled.
+ */
+export type OrchestratorFactory = () => DraftOrchestrator;
+
 export class DraftWorker {
   private client: SupabaseClient;
   private queue: DraftPgmqAdapter;
-  private orchestrator: DraftOrchestrator;
+  private orchestratorOrFactory: DraftOrchestrator | OrchestratorFactory;
+  private orchestratorInstance: DraftOrchestrator | null = null;
   private pollIntervalMs: number;
   private visibilityTimeoutSeconds: number;
 
   constructor(
     client: SupabaseClient,
-    orchestrator: DraftOrchestrator,
+    orchestratorOrFactory: DraftOrchestrator | OrchestratorFactory,
     config: DraftWorkerConfig
   ) {
     this.client = client;
     this.queue = new DraftPgmqAdapter(client);
-    this.orchestrator = orchestrator;
+    this.orchestratorOrFactory = orchestratorOrFactory;
     this.pollIntervalMs = config.pollIntervalMs;
     this.visibilityTimeoutSeconds = config.visibilityTimeoutSeconds;
+  }
+
+  /**
+   * Lazily construct or return the orchestrator.
+   * If a factory was provided, it is called on first access.
+   * If the factory throws (missing provider configuration), the
+   * caller must catch and archive the job with DRAFT_PROVIDER_CONFIG_ERROR.
+   */
+  private getOrchestrator(): DraftOrchestrator {
+    if (this.orchestratorInstance) {
+      return this.orchestratorInstance;
+    }
+    if (typeof this.orchestratorOrFactory === 'function') {
+      this.orchestratorInstance = this.orchestratorOrFactory();
+    } else {
+      this.orchestratorInstance = this.orchestratorOrFactory;
+    }
+    return this.orchestratorInstance;
   }
 
   /**
@@ -138,6 +166,22 @@ export class DraftWorker {
         return;
       }
 
+      // Step 2b: Lazily construct orchestrator (only when feature is enabled).
+      // If provider configuration is missing, the factory throws and we
+      // archive through the approved config-error path.
+      // Credential values are never logged.
+      let orchestrator: DraftOrchestrator;
+      try {
+        orchestrator = this.getOrchestrator();
+      } catch {
+        logger.info('Provider configuration error, archiving draft job', {
+          draftGenerationJobId,
+          requestId,
+        });
+        await this.archiveFailed(msgId, draftGenerationJobId, 'DRAFT_PROVIDER_CONFIG_ERROR');
+        return;
+      }
+
       // Step 3: Load source message
       const sourceText = await this.loadSourceMessage(jobRow.source_message_id, jobRow.organization_id);
       if (!sourceText) {
@@ -180,7 +224,7 @@ export class DraftWorker {
         requestId: requestId || draftGenerationJobId,
       };
 
-      const result = await this.orchestrator.generateDraft(draftRequest);
+      const result = await orchestrator.generateDraft(draftRequest);
 
       if (result.success) {
         // Step 7: Store draft

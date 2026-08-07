@@ -579,4 +579,199 @@ describe('DraftWorker', () => {
     expect(malformedArchiveCall[1].p_error_code).toBe('DRAFT_INVALID_REQUEST');
     expect(APPROVED_CODES.has('DRAFT_INVALID_REQUEST')).toBe(true);
   });
+
+  // --- Stage 8A: Safe-disabled startup correction tests ---
+
+  // T8A-1: Worker starts without Logicc credentials while feature disabled
+  it('starts and processes jobs without Logicc credentials when feature is disabled', async () => {
+    const rpcConfig: MockRpcConfig = {
+      is_feature_enabled: { data: false, error: null },
+      skip_draft_job: { data: true, error: null },
+    };
+    const queryConfig: MockQueryConfig = {
+      draft_generation_jobs: {
+        filters: { id: MOCK_JOB_ID },
+        data: MOCK_JOB_ROW,
+      },
+    };
+    const client = createMockClient(rpcConfig, queryConfig);
+
+    // Factory that would throw if called (simulating missing Logicc credentials)
+    const factory = vi.fn(() => {
+      throw new Error('Missing Logicc provider configuration');
+    });
+
+    const worker = new DraftWorker(client, factory, {
+      pollIntervalMs: 100,
+      visibilityTimeoutSeconds: 30,
+    });
+
+    // Should process the job without calling the factory
+    await (worker as unknown as { processJob: (job: unknown) => Promise<void> }).processJob(MOCK_QUEUE_MESSAGE);
+
+    // Factory must NOT have been called (feature disabled)
+    expect(factory).not.toHaveBeenCalled();
+
+    // Job should be skipped with FEATURE_DISABLED
+    const rpcCalls = (client as unknown as { rpc: { mock: { calls: unknown[] } } }).rpc.mock.calls;
+    const skipCall = rpcCalls.find((c: unknown[]) => c[0] === 'skip_draft_job');
+    expect(skipCall).toBeDefined();
+    expect(skipCall[1].p_skip_reason).toBe('FEATURE_DISABLED');
+  });
+
+  // T8A-2: Worker starts without Langdock credentials while feature disabled
+  it('starts and processes jobs without Langdock credentials when feature is disabled', async () => {
+    const rpcConfig: MockRpcConfig = {
+      is_feature_enabled: { data: false, error: null },
+      skip_draft_job: { data: true, error: null },
+    };
+    const queryConfig: MockQueryConfig = {
+      draft_generation_jobs: {
+        filters: { id: MOCK_JOB_ID },
+        data: MOCK_JOB_ROW,
+      },
+    };
+    const client = createMockClient(rpcConfig, queryConfig);
+
+    // Factory that would throw if called (simulating missing Langdock credentials)
+    const factory = vi.fn(() => {
+      throw new Error('Missing Langdock fallback configuration');
+    });
+
+    const worker = new DraftWorker(client, factory, {
+      pollIntervalMs: 100,
+      visibilityTimeoutSeconds: 30,
+    });
+
+    await (worker as unknown as { processJob: (job: unknown) => Promise<void> }).processJob(MOCK_QUEUE_MESSAGE);
+
+    // Factory must NOT have been called
+    expect(factory).not.toHaveBeenCalled();
+
+    const rpcCalls = (client as unknown as { rpc: { mock: { calls: unknown[] } } }).rpc.mock.calls;
+    const skipCall = rpcCalls.find((c: unknown[]) => c[0] === 'skip_draft_job');
+    expect(skipCall).toBeDefined();
+    expect(skipCall[1].p_skip_reason).toBe('FEATURE_DISABLED');
+  });
+
+  // T8A-3: Feature-disabled job makes zero provider calls
+  it('makes zero provider calls when feature is disabled', async () => {
+    const rpcConfig: MockRpcConfig = {
+      is_feature_enabled: { data: false, error: null },
+      skip_draft_job: { data: true, error: null },
+    };
+    const queryConfig: MockQueryConfig = {
+      draft_generation_jobs: {
+        filters: { id: MOCK_JOB_ID },
+        data: MOCK_JOB_ROW,
+      },
+    };
+    const client = createMockClient(rpcConfig, queryConfig);
+
+    // Use a mock orchestrator that would make provider calls if invoked
+    const orchestrator = createMockOrchestrator('success');
+    const worker = new DraftWorker(client, orchestrator as unknown as { generateDraft: (req: unknown) => Promise<unknown> }, {
+      pollIntervalMs: 100,
+      visibilityTimeoutSeconds: 30,
+    });
+
+    await (worker as unknown as { processJob: (job: unknown) => Promise<void> }).processJob(MOCK_QUEUE_MESSAGE);
+
+    // Orchestrator (and therefore providers) must NOT have been called
+    expect(orchestrator.generateDraft).not.toHaveBeenCalled();
+
+    // No store_draft, no reserve_draft_usage (those come after the feature gate)
+    const rpcCalls = (client as unknown as { rpc: { mock: { calls: unknown[] } } }).rpc.mock.calls;
+    const storeCall = rpcCalls.find((c: unknown[]) => c[0] === 'store_draft');
+    expect(storeCall).toBeUndefined();
+    const reserveCall = rpcCalls.find((c: unknown[]) => c[0] === 'reserve_draft_usage');
+    expect(reserveCall).toBeUndefined();
+  });
+
+  // T8A-4: Feature enabled + missing Logicc configuration fails through approved config-error handling
+  it('archives with DRAFT_PROVIDER_CONFIG_ERROR when feature enabled but provider config missing', async () => {
+    const rpcConfig: MockRpcConfig = {
+      is_feature_enabled: { data: true, error: null },
+      archive_draft_failed_job: { data: { archived: true, already_archived: false }, error: null },
+    };
+    const queryConfig: MockQueryConfig = {
+      draft_generation_jobs: {
+        filters: { id: MOCK_JOB_ID },
+        data: MOCK_JOB_ROW,
+      },
+    };
+    const client = createMockClient(rpcConfig, queryConfig);
+
+    // Factory that throws because Logicc credentials are missing
+    const factory = vi.fn(() => {
+      throw new Error('Missing Logicc provider configuration');
+    });
+
+    const worker = new DraftWorker(client, factory, {
+      pollIntervalMs: 100,
+      visibilityTimeoutSeconds: 30,
+    });
+
+    await (worker as unknown as { processJob: (job: unknown) => Promise<void> }).processJob(MOCK_QUEUE_MESSAGE);
+
+    // Factory WAS called (feature enabled)
+    expect(factory).toHaveBeenCalledOnce();
+
+    // Job archived with DRAFT_PROVIDER_CONFIG_ERROR
+    const rpcCalls = (client as unknown as { rpc: { mock: { calls: unknown[] } } }).rpc.mock.calls;
+    const archiveCall = rpcCalls.find((c: unknown[]) => c[0] === 'archive_draft_failed_job');
+    expect(archiveCall).toBeDefined();
+    expect(archiveCall[1].p_error_code).toBe('DRAFT_PROVIDER_CONFIG_ERROR');
+
+    // No provider call was made (factory threw before construction)
+    const storeCall = rpcCalls.find((c: unknown[]) => c[0] === 'store_draft');
+    expect(storeCall).toBeUndefined();
+  });
+
+  // T8A-5: Provider credentials never appear in logs
+  it('never logs provider credential values', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const FAKE_LOGICC_KEY = 'sk-logicc-secret-key-12345';
+    const FAKE_LANGDOCK_KEY = 'ld-secret-key-67890';
+    const FAKE_LOGICC_URL = 'https://api.logicc.example.com';
+
+    const rpcConfig: MockRpcConfig = {
+      is_feature_enabled: { data: true, error: null },
+      archive_draft_failed_job: { data: { archived: true, already_archived: false }, error: null },
+    };
+    const queryConfig: MockQueryConfig = {
+      draft_generation_jobs: {
+        filters: { id: MOCK_JOB_ID },
+        data: MOCK_JOB_ROW,
+      },
+    };
+    const client = createMockClient(rpcConfig, queryConfig);
+
+    // Factory that throws, simulating missing config, but with credential-like values in the error
+    const factory = vi.fn(() => {
+      throw new Error(`Missing Logicc provider configuration: ${FAKE_LOGICC_KEY}`);
+    });
+
+    const worker = new DraftWorker(client, factory, {
+      pollIntervalMs: 100,
+      visibilityTimeoutSeconds: 30,
+    });
+
+    await (worker as unknown as { processJob: (job: unknown) => Promise<void> }).processJob(MOCK_QUEUE_MESSAGE);
+
+    const allLogs = [
+      ...consoleSpy.mock.calls.map((c) => JSON.stringify(c)),
+      ...consoleErrorSpy.mock.calls.map((c) => JSON.stringify(c)),
+    ].join(' ');
+
+    // Credential values must never appear in logs
+    expect(allLogs).not.toContain(FAKE_LOGICC_KEY);
+    expect(allLogs).not.toContain(FAKE_LANGDOCK_KEY);
+    expect(allLogs).not.toContain(FAKE_LOGICC_URL);
+
+    consoleSpy.mockRestore();
+    consoleErrorSpy.mockRestore();
+  });
 });

@@ -9,6 +9,12 @@
  * both WhatsApp and draft generation concurrently. Use this dedicated
  * entry point instead.
  *
+ * Per Stage 8A correction: the worker starts with only infrastructure
+ * credentials (Supabase URL + service role key). Provider credentials
+ * (Logicc, Langdock) are validated lazily, only when the worker reaches
+ * the provider-generation path (feature flag enabled). This allows safe
+ * startup and polling while ai_draft_generation is disabled.
+ *
  * Package scripts:
  *   dev:draft  → tsx src/draft-index.ts
  *   start:draft → node dist/draft-index.js
@@ -34,49 +40,46 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Explicit provider construction — no env-based auto-discovery
-  const logiccApiKey = process.env.LOGICC_API_KEY;
-  const logiccEndpointUrl = process.env.LOGICC_ENDPOINT_URL;
-  const langdockApiKey = process.env.LANGDOCK_API_CODE;
-
-  if (!logiccApiKey || !logiccEndpointUrl) {
-    console.error(JSON.stringify({
-      error: 'Missing Logicc provider configuration',
-      required: ['LOGICC_API_KEY', 'LOGICC_ENDPOINT_URL'],
-    }));
-    process.exit(1);
-  }
-
-  if (!langdockApiKey) {
-    console.error(JSON.stringify({
-      error: 'Missing Langdock fallback configuration',
-      required: ['LANGDOCK_API_CODE'],
-    }));
-    process.exit(1);
-  }
-
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const client = createAdminSupabaseClient(supabaseUrl, serviceRoleKey) as any;
 
-  // Construct providers explicitly
-  const primaryProvider = new LogiccAdapter({
-    apiKey: logiccApiKey,
-    endpointUrl: logiccEndpointUrl,
-    defaultModel: process.env.LOGICC_DEFAULT_MODEL,
-  });
+  // Provider construction is deferred to a lazy factory.
+  // The factory is called only when the worker reaches the provider-generation
+  // path (ai_draft_generation feature flag enabled). If provider credentials
+  // are missing, the factory throws and the worker archives the job through
+  // the approved config-error path. Credential values are never logged.
+  const orchestratorFactory = () => {
+    const logiccApiKey = process.env.LOGICC_API_KEY;
+    const logiccEndpointUrl = process.env.LOGICC_ENDPOINT_URL;
+    const langdockApiKey = process.env.LANGDOCK_API_CODE;
 
-  const fallbackProvider = new LangdockAdapter({
-    apiKey: langdockApiKey,
-    endpointUrl: process.env.LANGDOCK_ENDPOINT_URL,
-    defaultModel: process.env.MODEL,
-  });
+    if (!logiccApiKey || !logiccEndpointUrl) {
+      throw new Error('Missing Logicc provider configuration');
+    }
 
-  const orchestrator = new DraftOrchestrator({
-    primary: primaryProvider,
-    fallback: fallbackProvider,
-  });
+    if (!langdockApiKey) {
+      throw new Error('Missing Langdock fallback configuration');
+    }
 
-  const worker = new DraftWorker(client, orchestrator, {
+    const primaryProvider = new LogiccAdapter({
+      apiKey: logiccApiKey,
+      endpointUrl: logiccEndpointUrl,
+      defaultModel: process.env.LOGICC_DEFAULT_MODEL,
+    });
+
+    const fallbackProvider = new LangdockAdapter({
+      apiKey: langdockApiKey,
+      endpointUrl: process.env.LANGDOCK_ENDPOINT_URL,
+      defaultModel: process.env.MODEL,
+    });
+
+    return new DraftOrchestrator({
+      primary: primaryProvider,
+      fallback: fallbackProvider,
+    });
+  };
+
+  const worker = new DraftWorker(client, orchestratorFactory, {
     pollIntervalMs: POLL_INTERVAL_MS,
     visibilityTimeoutSeconds: VISIBILITY_TIMEOUT_SECONDS,
   });
