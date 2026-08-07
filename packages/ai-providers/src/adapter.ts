@@ -25,6 +25,13 @@ export interface CompletionOptions {
   readonly maxTokens?: number;
   readonly organizationId?: string;
   readonly requestId?: string;
+  /**
+   * Optional AbortSignal for cancellation. When the signal aborts, the
+   * underlying fetch() call is terminated and the adapter throws a
+   * ProviderError with category 'TIMEOUT'. This is a real abort, not a
+   * Promise.race() wrapper — the HTTP request is genuinely cancelled.
+   */
+  readonly signal?: AbortSignal;
 }
 
 export interface CompletionResponse {
@@ -47,6 +54,9 @@ export interface AIProviderAdapter {
    * Generates a text completion based on standard ChatMessages.
    * The sole capability currently implemented (see ADR-006). Live production
    * calls to external providers remain disabled until Phase 3 authorization.
+   *
+   * When options.signal is provided and aborted, the underlying fetch() is
+   * cancelled and a ProviderError with category 'TIMEOUT' is thrown.
    */
   generateCompletion(
     messages: readonly ChatMessage[],

@@ -6,13 +6,17 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
+    "dev:draft": "tsx src/draft-index.ts",
     "start": "node dist/index.js",
+    "start:draft": "node dist/draft-index.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint ."
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",
+    "@tugpt/ai-orchestration": "workspace:*",
+    "@tugpt/ai-providers": "workspace:*",
     "@tugpt/database": "workspace:*",
     "@tugpt/jobs": "workspace:*",
     "@tugpt/observability": "workspace:*"

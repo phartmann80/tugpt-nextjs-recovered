@@ -2,22 +2,30 @@ import { metricsCollector } from '@tugpt/observability';
 import type { AIProviderAdapter, ChatMessage, CompletionOptions, CompletionResponse } from './adapter';
 import { ProviderError } from './errors';
 
-export interface LangdockConfig {
+export interface LogiccConfig {
   apiKey: string;
-  endpointUrl?: string;
+  endpointUrl: string;
   defaultModel?: string;
 }
 
-export class LangdockAdapter implements AIProviderAdapter {
-  readonly providerName = 'langdock';
+/**
+ * Logicc AI provider adapter.
+ *
+ * Thin HTTP adapter implementing AIProviderAdapter, same pattern as
+ * LangdockAdapter. POSTs to the Logicc chat completions endpoint and
+ * returns a CompletionResponse. Throws structured ProviderError on
+ * HTTP failures, network failures, and timeouts.
+ */
+export class LogiccAdapter implements AIProviderAdapter {
+  readonly providerName = 'logicc';
   private apiKey: string;
   private endpointUrl: string;
   private defaultModel: string;
 
-  constructor(config: LangdockConfig) {
+  constructor(config: LogiccConfig) {
     this.apiKey = config.apiKey;
-    this.endpointUrl = config.endpointUrl || 'https://api.langdock.com/openai/eu/v1';
-    this.defaultModel = config.defaultModel || 'gpt-5.2';
+    this.endpointUrl = config.endpointUrl;
+    this.defaultModel = config.defaultModel || 'logicc-default';
   }
 
   async generateCompletion(
@@ -84,7 +92,7 @@ export class LangdockAdapter implements AIProviderAdapter {
       });
 
       return {
-        id: data.id || `langdock-${Date.now()}`,
+        id: data.id || `logicc-${Date.now()}`,
         provider: this.providerName,
         model,
         text,
@@ -98,12 +106,10 @@ export class LangdockAdapter implements AIProviderAdapter {
     } catch (err) {
       const latencyMs = Date.now() - startTime;
 
-      // If it's already a ProviderError, re-throw as-is
       if (err instanceof ProviderError) {
         throw err;
       }
 
-      // AbortError → TIMEOUT
       if (err instanceof Error && err.name === 'AbortError') {
         metricsCollector.recordProviderCall({
           provider: this.providerName,
@@ -118,7 +124,6 @@ export class LangdockAdapter implements AIProviderAdapter {
         throw new ProviderError(this.providerName, 'TIMEOUT');
       }
 
-      // Network failure (TypeError: fetch failed)
       metricsCollector.recordProviderCall({
         provider: this.providerName,
         model,
