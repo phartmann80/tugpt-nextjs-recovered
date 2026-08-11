@@ -1,4 +1,3 @@
-export * from './types';
-export * from './fallback-matrix';
-export * from './prompt-builder';
-export * from './orchestrator';
+export { DraftOrchestrator } from './orchestrator.js';
+export { shouldFallback } from './fallback-matrix.js';
+export type { DraftConfig, DraftRequest, DraftResult, DraftError, DraftOutcome, OrchestratorConfig } from './types.js';
