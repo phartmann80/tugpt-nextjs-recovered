@@ -11,9 +11,9 @@
  *
  * Per Stage 8A correction: the worker starts with only infrastructure
  * credentials (Supabase URL + service role key). Provider credentials
- * (Logicc, Langdock) are validated lazily, only when the worker reaches
- * the provider-generation path (feature flag enabled). This allows safe
- * startup and polling while ai_draft_generation is disabled.
+ * (Logicc, Langdock, Anymize) are validated lazily, only when the worker
+ * reaches the provider-generation path (feature flag enabled). This allows
+ * safe startup and polling while ai_draft_generation is disabled.
  *
  * Package scripts:
  *   dev:draft  → tsx src/draft-index.ts
@@ -21,7 +21,7 @@
  */
 
 import { createAdminSupabaseClient } from '@tugpt/database';
-import { LangdockAdapter, LogiccAdapter } from '@tugpt/ai-providers';
+import { AnymizeAdapter, LangdockAdapter, LogiccAdapter } from '@tugpt/ai-providers';
 import { DraftOrchestrator } from '@tugpt/ai-orchestration';
 import { DraftWorker } from './draft-worker.js';
 
@@ -52,6 +52,9 @@ async function main(): Promise<void> {
     const logiccApiKey = process.env.LOGICC_API_KEY;
     const logiccEndpointUrl = process.env.LOGICC_ENDPOINT_URL;
     const langdockApiKey = process.env.LANGDOCK_API_CODE;
+    const anymizeApiKey = process.env.ANYMIZE_API_KEY;
+    const anymizeEndpointUrl = process.env.ANYMIZE_ENDPOINT_URL;
+    const anymizeDefaultModel = process.env.ANYMIZE_DEFAULT_MODEL;
 
     if (!logiccApiKey || !logiccEndpointUrl) {
       throw new Error('Missing Logicc provider configuration');
@@ -61,6 +64,9 @@ async function main(): Promise<void> {
       throw new Error('Missing Langdock fallback configuration');
     }
 
+    // Anymize is optional but recommended as tertiary fallback.
+    // If Anymize credentials are missing, the orchestrator will still work
+    // with a 2-provider chain (Logicc → Langdock).
     const primaryProvider = new LogiccAdapter({
       apiKey: logiccApiKey,
       endpointUrl: logiccEndpointUrl,
@@ -73,9 +79,19 @@ async function main(): Promise<void> {
       defaultModel: process.env.MODEL,
     });
 
+    let tertiaryProvider: AnymizeAdapter | undefined;
+    if (anymizeApiKey && anymizeEndpointUrl) {
+      tertiaryProvider = new AnymizeAdapter({
+        apiKey: anymizeApiKey,
+        endpointUrl: anymizeEndpointUrl,
+        defaultModel: anymizeDefaultModel || 'openai/gpt-5-mini',
+      });
+    }
+
     return new DraftOrchestrator({
       primary: primaryProvider,
       fallback: fallbackProvider,
+      tertiary: tertiaryProvider,
     });
   };
 
