@@ -1,73 +1,47 @@
-import type { AIProviderAdapter } from './adapter';
-import { LangdockAdapter, type LangdockConfig } from './langdock';
-import { MastraAdapter, type MastraConfig } from './mastra';
-import { OpenAIAdapter, type OpenAIConfig } from './openai';
+/**
+ * @file factory.ts
+ * @description Provider factory for creating AI provider adapters from
+ * environment variables. Supports Logicc (primary), Langdock (secondary),
+ * and Anymize (tertiary) providers.
+ */
 
-export type ProviderType = 'langdock' | 'mastra' | 'openai';
+import { AnymizeAdapter } from './anymize.js';
+import { LangdockAdapter } from './langdock.js';
+import { LogiccAdapter } from './logicc.js';
+import type { AIProviderAdapter } from './adapter.js';
 
-export interface ProviderFactoryConfig {
-  langdock?: LangdockConfig;
-  mastra?: MastraConfig;
-  openai?: OpenAIConfig;
-}
+export type ProviderType = 'logicc' | 'langdock' | 'anymize';
 
-export class AIProviderFactory {
-  private static instance: AIProviderFactory;
-  private adapters: Map<string, AIProviderAdapter> = new Map();
-
-  public static getInstance(): AIProviderFactory {
-    if (!AIProviderFactory.instance) {
-      AIProviderFactory.instance = new AIProviderFactory();
+export function createProviderFromEnv(provider: ProviderType): AIProviderAdapter {
+  switch (provider) {
+    case 'logicc': {
+      const apiKey = process.env.LOGICC_API_KEY;
+      const endpointUrl = process.env.LOGICC_ENDPOINT_URL;
+      const defaultModel = process.env.LOGICC_DEFAULT_MODEL;
+      if (!apiKey || !endpointUrl) {
+        throw new Error(`Missing Logicc configuration: LOGICC_API_KEY and LOGICC_ENDPOINT_URL are required`);
+      }
+      return new LogiccAdapter({ apiKey, endpointUrl, defaultModel });
     }
-    return AIProviderFactory.instance;
-  }
-
-  public registerAdapter(adapter: AIProviderAdapter): void {
-    this.adapters.set(adapter.providerName.toLowerCase(), adapter);
-  }
-
-  public getAdapter(providerName: ProviderType | string): AIProviderAdapter {
-    const key = providerName.toLowerCase();
-    const adapter = this.adapters.get(key);
-
-    if (!adapter) {
-      throw new Error(`AI Provider Adapter '${providerName}' is not registered.`);
+    case 'langdock': {
+      const apiKey = process.env.LANGDOCK_API_CODE;
+      const endpointUrl = process.env.LANGDOCK_ENDPOINT_URL;
+      const defaultModel = process.env.MODEL;
+      if (!apiKey) {
+        throw new Error(`Missing Langdock configuration: LANGDOCK_API_CODE is required`);
+      }
+      return new LangdockAdapter({ apiKey, endpointUrl, defaultModel });
     }
-
-    return adapter;
-  }
-
-  public initializeFromEnv(): void {
-    const langdockKey = process.env.LANGDOCK_API_CODE;
-    if (langdockKey) {
-      this.registerAdapter(
-        new LangdockAdapter({
-          apiKey: langdockKey,
-          endpointUrl: process.env.LANGDOCK_ENDPOINT_URL,
-          defaultModel: process.env.MODEL || 'gpt-5.2',
-        })
-      );
+    case 'anymize': {
+      const apiKey = process.env.ANYMIZE_API_KEY;
+      const endpointUrl = process.env.ANYMIZE_ENDPOINT_URL;
+      const defaultModel = process.env.ANYMIZE_DEFAULT_MODEL || 'openai/gpt-5-mini';
+      if (!apiKey || !endpointUrl) {
+        throw new Error(`Missing Anymize configuration: ANYMIZE_API_KEY and ANYMIZE_ENDPOINT_URL are required`);
+      }
+      return new AnymizeAdapter({ apiKey, endpointUrl, defaultModel });
     }
-
-    const mastraKey = process.env.GATEWAY_API_MASTRA_KEY;
-    if (mastraKey) {
-      this.registerAdapter(
-        new MastraAdapter({
-          apiKey: mastraKey,
-          gatewayUrl: process.env.GATEWAY_API_URL,
-        })
-      );
-    }
-
-    const openAIKey = process.env.OPENAI_API_KEY;
-    if (openAIKey) {
-      this.registerAdapter(
-        new OpenAIAdapter({
-          apiKey: openAIKey,
-        })
-      );
-    }
+    default:
+      throw new Error(`Unknown provider type: ${provider}`);
   }
 }
-
-export const aiProviderFactory = AIProviderFactory.getInstance();
