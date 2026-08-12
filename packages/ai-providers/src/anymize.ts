@@ -15,6 +15,13 @@ export interface AnymizeConfig {
  * LogiccAdapter and LangdockAdapter. POSTs to the Anymize chat completions
  * endpoint and returns a CompletionResponse. Throws structured ProviderError on
  * HTTP failures, network failures, and timeouts.
+ *
+ * Default endpoint: https://app.anymize.ai/api/v1/llm (official Anymize API base).
+ * The full request URL becomes: {endpointUrl}/chat/completions
+ *
+ * No default model is invented. ANYMIZE_DEFAULT_MODEL must be set to a valid
+ * model identifier when Anymize is enabled. Use GET /models to discover
+ * available models from the account.
  */
 export class AnymizeAdapter implements AIProviderAdapter {
   readonly providerName = 'anymize';
@@ -24,8 +31,8 @@ export class AnymizeAdapter implements AIProviderAdapter {
 
   constructor(config: AnymizeConfig) {
     this.apiKey = config.apiKey;
-    this.endpointUrl = config.endpointUrl || 'https://api.anymize.com/v1';
-    this.defaultModel = config.defaultModel || 'anymize-default';
+    this.endpointUrl = config.endpointUrl || 'https://app.anymize.ai/api/v1/llm';
+    this.defaultModel = config.defaultModel || '';
   }
 
   async generateCompletion(
@@ -35,6 +42,10 @@ export class AnymizeAdapter implements AIProviderAdapter {
     const startTime = Date.now();
     const model = options.model || this.defaultModel;
     const signal = options.signal;
+
+    if (!model) {
+      throw new ProviderError(this.providerName, 'INVALID_CONFIGURATION');
+    }
 
     const requestBody = {
       model,
@@ -70,13 +81,52 @@ export class AnymizeAdapter implements AIProviderAdapter {
         throw ProviderError.fromHttpStatus(this.providerName, response.status);
       }
 
-      const data = (await response.json()) as {
+      // Parse JSON body. If parsing fails on a 2xx response, classify as
+      // MALFORMED_PROVIDER_RESPONSE (terminal), not NETWORK_FAILURE.
+      let data: {
         id: string;
         choices: Array<{ message: { content: string } }>;
         usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
       };
 
-      const text = data.choices[0]?.message?.content || '';
+      try {
+        data = await response.json();
+      } catch {
+        metricsCollector.recordProviderCall({
+          provider: this.providerName,
+          model,
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+          latencyMs,
+          success: false,
+          errorCode: 'MALFORMED_PROVIDER_RESPONSE',
+        });
+        throw new ProviderError(this.providerName, 'MALFORMED_PROVIDER_RESPONSE');
+      }
+
+      // Validate required response shape. Invalid shape on 2xx is terminal.
+      if (
+        !data ||
+        !data.choices ||
+        !Array.isArray(data.choices) ||
+        data.choices.length === 0 ||
+        !data.choices[0]?.message?.content
+      ) {
+        metricsCollector.recordProviderCall({
+          provider: this.providerName,
+          model,
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+          latencyMs,
+          success: false,
+          errorCode: 'MALFORMED_PROVIDER_RESPONSE',
+        });
+        throw new ProviderError(this.providerName, 'MALFORMED_PROVIDER_RESPONSE');
+      }
+
+      const text = data.choices[0].message.content;
       const promptTokens = data.usage?.prompt_tokens || 0;
       const completionTokens = data.usage?.completion_tokens || 0;
       const totalTokens = data.usage?.total_tokens || promptTokens + completionTokens;
