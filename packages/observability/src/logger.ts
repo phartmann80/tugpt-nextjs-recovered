@@ -46,7 +46,7 @@ export function sanitizeValue(key: string, value: unknown): unknown {
 
   if (typeof value === 'string') {
     let sanitized = value;
-    sanitized = sanitized.replace(/Bearer\s+[A-Za-z0-9-_=.]+/gi, 'Bearer [REDACTED]');
+    sanitized = sanitized.replace(/Bearer\s+[A-Za-z0-9-_.=]+/gi, 'Bearer [REDACTED]');
     sanitized = sanitized.replace(/sk-[A-Za-z0-9_-]{20,}|sbp_[A-Za-z0-9_-]{20,}/gi, '[REDACTED]');
     return sanitized;
   }
@@ -87,7 +87,7 @@ export class Logger {
     if (err) {
       payload.error = {
         name: err.name,
-        message: err.message,
+        message: sanitizeValue('message', err.message) as string,
         stack: err.stack,
       };
     }
