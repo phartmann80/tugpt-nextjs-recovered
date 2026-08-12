@@ -11,7 +11,7 @@
  *
  * Per Stage 8A correction: the worker starts with only infrastructure
  * credentials (Supabase URL + service role key). Provider credentials
- * (Logicc, Langdock) are validated lazily, only when the worker reaches
+ * (Logicc, Langdock, Anymize) are validated lazily, only when the worker reaches
  * the provider-generation path (feature flag enabled). This allows safe
  * startup and polling while ai_draft_generation is disabled.
  *
@@ -21,7 +21,7 @@
  */
 
 import { createAdminSupabaseClient } from '@tugpt/database';
-import { LangdockAdapter, LogiccAdapter } from '@tugpt/ai-providers';
+import { AnymizeAdapter, LangdockAdapter, LogiccAdapter } from '@tugpt/ai-providers';
 import { DraftOrchestrator } from '@tugpt/ai-orchestration';
 import { DraftWorker } from './draft-worker.js';
 
@@ -61,6 +61,8 @@ async function main(): Promise<void> {
       throw new Error('Missing Langdock fallback configuration');
     }
 
+    const anymizeApiKey = process.env.ANYMIZE_API_KEY;
+
     const primaryProvider = new LogiccAdapter({
       apiKey: logiccApiKey,
       endpointUrl: logiccEndpointUrl,
@@ -73,9 +75,20 @@ async function main(): Promise<void> {
       defaultModel: process.env.MODEL,
     });
 
+    // Tertiary fallback (Anymize) is optional: if credentials are absent,
+    // the orchestrator simply has no tertiary and returns the secondary error.
+    const tertiaryProvider = anymizeApiKey
+      ? new AnymizeAdapter({
+          apiKey: anymizeApiKey,
+          endpointUrl: process.env.ANYMIZE_ENDPOINT_URL,
+          defaultModel: process.env.ANYMIZE_DEFAULT_MODEL,
+        })
+      : undefined;
+
     return new DraftOrchestrator({
       primary: primaryProvider,
       fallback: fallbackProvider,
+      tertiary: tertiaryProvider,
     });
   };
 
