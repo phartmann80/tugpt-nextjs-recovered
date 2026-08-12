@@ -1,4 +1,5 @@
 export * from './adapter';
+export * from './anymize';
 export * from './errors';
 export * from './factory';
 export * from './langdock';
