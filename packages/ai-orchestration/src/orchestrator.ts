@@ -3,9 +3,11 @@
  * @description Draft generation orchestrator with primary/fallback provider routing.
  *
  * Calls the primary provider (Logicc) with a 25-second AbortController timeout.
- * On a fallback-eligible error, calls the fallback provider (Langdock) with
- * the same 25-second timeout. On a fallback-prohibited error, returns the
- * error immediately without calling the fallback.
+ * On a fallback-eligible error, calls the secondary fallback provider (Langdock)
+ * with the same 25-second timeout. On a fallback-eligible error from the secondary,
+ * calls the tertiary fallback provider (Anymize) with the same 25-second timeout.
+ * On a fallback-prohibited error, returns the error immediately without calling
+ * any further providers.
  *
  * Validates output: non-empty and within maxDraftLength (character limit).
  * A separate conservative provider-token limit is used for the maxTokens
@@ -32,17 +34,21 @@ const CONSERVATIVE_TOKEN_LIMIT = 1024;
 export interface DraftOrchestratorConfig {
   /** Primary provider adapter (Logicc). */
   primary: AIProviderAdapter;
-  /** Fallback provider adapter (Langdock). */
+  /** Secondary fallback provider adapter (Langdock). */
   fallback: AIProviderAdapter;
+  /** Tertiary fallback provider adapter (Anymize). Optional for backward compatibility. */
+  tertiary?: AIProviderAdapter;
 }
 
 export class DraftOrchestrator {
   private primary: AIProviderAdapter;
   private fallback: AIProviderAdapter;
+  private tertiary: AIProviderAdapter | null;
 
   constructor(config: DraftOrchestratorConfig) {
     this.primary = config.primary;
     this.fallback = config.fallback;
+    this.tertiary = config.tertiary ?? null;
   }
 
   /**
@@ -50,6 +56,11 @@ export class DraftOrchestrator {
    *
    * Returns a DraftGenerationResult: success with text/provider/model/latency,
    * or failure with a structured ProviderError.
+   *
+   * Provider chain: Logicc -> Langdock -> Anymize
+   * Fallback happens inside one queue delivery. The PGMQ retry lifecycle
+   * (attempt 1 -> 5s, attempt 2 -> 15s, attempt 3 -> archive) is preserved
+   * at the worker level, not here.
    */
   async generateDraft(request: DraftRequest): Promise<DraftGenerationResult> {
     const messages = buildPromptMessages(request.sourceMessageText, request.config);
@@ -60,7 +71,7 @@ export class DraftOrchestrator {
       requestId: request.requestId,
     };
 
-    // Attempt primary provider with 25s timeout
+    // Attempt primary provider (Logicc) with 25s timeout
     const primaryResult = await this.callProvider(this.primary, messages, options);
 
     if (primaryResult.success) {
@@ -74,15 +85,34 @@ export class DraftOrchestrator {
       return { success: false, error: primaryResult.error };
     }
 
-    // Attempt fallback provider with 25s timeout
+    // Attempt secondary fallback provider (Langdock) with 25s timeout
     const fallbackResult = await this.callProvider(this.fallback, messages, options);
 
     if (fallbackResult.success) {
       return this.validateOutput(fallbackResult.response, request.config.maxDraftLength);
     }
 
-    // Both providers failed: return the fallback error
-    return { success: false, error: fallbackResult.error };
+    // Check if tertiary fallback is allowed for the secondary's error category
+    const tertiaryDecision = shouldFallback(fallbackResult.error.category);
+
+    if (tertiaryDecision === 'FALLBACK_PROHIBITED') {
+      return { success: false, error: fallbackResult.error };
+    }
+
+    // If no tertiary provider configured, return the secondary error
+    if (!this.tertiary) {
+      return { success: false, error: fallbackResult.error };
+    }
+
+    // Attempt tertiary fallback provider (Anymize) with 25s timeout
+    const tertiaryResult = await this.callProvider(this.tertiary, messages, options);
+
+    if (tertiaryResult.success) {
+      return this.validateOutput(tertiaryResult.response, request.config.maxDraftLength);
+    }
+
+    // All three providers failed: return the tertiary error
+    return { success: false, error: tertiaryResult.error };
   }
 
   /**
