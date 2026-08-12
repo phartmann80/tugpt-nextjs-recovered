@@ -1,14 +1,18 @@
 import type { AIProviderAdapter } from './adapter';
+import { AnymizeAdapter, type AnymizeConfig } from './anymize';
 import { LangdockAdapter, type LangdockConfig } from './langdock';
+import { LogiccAdapter, type LogiccConfig } from './logicc';
 import { MastraAdapter, type MastraConfig } from './mastra';
 import { OpenAIAdapter, type OpenAIConfig } from './openai';
 
-export type ProviderType = 'langdock' | 'mastra' | 'openai';
+export type ProviderType = 'logicc' | 'langdock' | 'mastra' | 'openai' | 'anymize';
 
 export interface ProviderFactoryConfig {
+  logicc?: LogiccConfig;
   langdock?: LangdockConfig;
   mastra?: MastraConfig;
   openai?: OpenAIConfig;
+  anymize?: AnymizeConfig;
 }
 
 export class AIProviderFactory {
@@ -64,6 +68,28 @@ export class AIProviderFactory {
       this.registerAdapter(
         new OpenAIAdapter({
           apiKey: openAIKey,
+        })
+      );
+    }
+
+    const logiccKey = process.env.LOGICC_API_KEY;
+    if (logiccKey) {
+      this.registerAdapter(
+        new LogiccAdapter({
+          apiKey: logiccKey,
+          endpointUrl: process.env.LOGICC_ENDPOINT_URL || '',
+          defaultModel: process.env.LOGICC_DEFAULT_MODEL,
+        })
+      );
+    }
+
+    const anymizeKey = process.env.ANYMIZE_API_KEY;
+    if (anymizeKey) {
+      this.registerAdapter(
+        new AnymizeAdapter({
+          apiKey: anymizeKey,
+          endpointUrl: process.env.ANYMIZE_ENDPOINT_URL,
+          defaultModel: process.env.ANYMIZE_DEFAULT_MODEL,
         })
       );
     }
