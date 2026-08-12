@@ -21,7 +21,7 @@ Production compliance requires structured log telemetry and immutable audit logg
 ## Consequences
 - Guaranteed audit trail for forensic investigation.
 - Real-time observability formatted for cloud logging aggregators (Datadog, GCP Cloud Logging).
-- Secrets in error messages are redacted alongside secrets in context values, preventing accidental leakage through thrown errors.
+- Secrets in error messages are now redacted alongside secrets in context values, preventing accidental leakage through thrown errors.
 
 ## Security Implications
 Audit trail cannot be tampered with or deleted by malicious organization admins or compromised user accounts.
