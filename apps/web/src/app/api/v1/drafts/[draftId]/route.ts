@@ -4,7 +4,8 @@
 
 import { NextResponse } from 'next/server';
 import { defaultLogger } from '@tugpt/observability';
-import { createServerClient, createAdminSupabaseClient } from '@tugpt/database';
+import { createAuthenticatedServerClient } from '@/lib/supabase/server';
+import { createAdminSupabaseClient } from '@tugpt/database';
 import { AuthService } from '@tugpt/auth';
 import { DraftApiService } from '@/lib/draft-api/service';
 import { checkDraftFeatureGate } from '@/lib/draft-api/feature-gate';
@@ -32,7 +33,7 @@ export async function GET(
       return errorResponse(400, 'INVALID_UUID', 'Invalid draft ID format');
     }
 
-    const supabase = createServerClient();
+    const supabase = await createAuthenticatedServerClient();
     const authService = new AuthService(supabase);
     const user = await authService.getCurrentUser();
 
