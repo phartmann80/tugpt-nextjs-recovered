@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { createServerClient as createSSRClient } from '@supabase/ssr';
+import type { Database } from '@tugpt/database';
 
 export type RouteType = 'auth' | 'protected' | 'public';
 
@@ -18,7 +20,7 @@ export function classifyRoute(pathname: string): RouteType {
   return 'public';
 }
 
-export function proxy(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Inject Request ID for distributed tracing
@@ -34,15 +36,36 @@ export function proxy(request: NextRequest) {
     request.headers.get('x-tenant-id') ||
     undefined;
 
-  // Handle protected routes authentication check
-  const sessionCookie =
-    request.cookies.get('sb-access-token')?.value ||
-    request.cookies.get('tugpt_session')?.value;
+  // Handle protected routes authentication check using Supabase SSR session
+  if (routeType === 'protected') {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-  if (routeType === 'protected' && !sessionCookie) {
-    const loginUrl = new URL('/auth/login', request.url);
-    loginUrl.searchParams.set('redirect', pathname);
-    return NextResponse.redirect(loginUrl);
+    if (supabaseUrl && supabaseKey) {
+      const supabase = createSSRClient<Database>(supabaseUrl, supabaseKey, {
+        cookies: {
+          getAll() {
+            return request.cookies.getAll();
+          },
+          setAll() {
+            // Cannot set cookies in middleware/proxy; the browser client handles refresh.
+          },
+        },
+      });
+
+      const { data: { session } } = await supabase.auth.getSession();
+
+      if (!session) {
+        const loginUrl = new URL('/auth/login', request.url);
+        loginUrl.searchParams.set('redirect', pathname);
+        return NextResponse.redirect(loginUrl);
+      }
+    } else {
+      // Fallback: no Supabase env configured, redirect to login
+      const loginUrl = new URL('/auth/login', request.url);
+      loginUrl.searchParams.set('redirect', pathname);
+      return NextResponse.redirect(loginUrl);
+    }
   }
 
   // Propagate headers to downstream route handlers and server components
