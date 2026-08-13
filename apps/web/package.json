@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@babel/runtime": "^8.0.0",
+    "@supabase/ssr": "^0.12.4",
     "@tailwindcss/node": "^4.3.2",
     "@tugpt/ai-providers": "workspace:*",
     "@tugpt/auth": "workspace:*",
