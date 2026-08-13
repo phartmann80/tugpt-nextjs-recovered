@@ -5,7 +5,7 @@ AI-powered platform built with Next.js 16, React 19, and Supabase. Phase 3A (Sec
 ## Tech Stack
 
 | Layer | Technology |
-|--------|------------------|
+|---------|---------|
 | Package manager | pnpm 10.34+ |
 | Monorepo orchestration | Turborepo |
 | Web framework | Next.js 16 (App Router) |
@@ -13,6 +13,7 @@ AI-powered platform built with Next.js 16, React 19, and Supabase. Phase 3A (Sec
 | Language | TypeScript 5.4+ (strict mode) |
 | Database & Auth | Supabase (PostgreSQL, RLS, GoTrue) |
 | AI providers | Logicc, Langdock, Anymize (via adapter pattern) |
+| Worker runtime | tsx (ESM syntax in CJS mode, no `"type": "module"`) |
 | Testing | Vitest (JS/TS), pgTAP (SQL) |
 | Linting | ESLint 9 (flat config) |
 
@@ -21,25 +22,25 @@ AI-powered platform built with Next.js 16, React 19, and Supabase. Phase 3A (Sec
 ```
 tugpt-nextjs-recovered/
 ├── apps/
-│   └── web/                        # Next.js application
+│   ├── web/                    # Next.js application
+│   └── worker/                 # Background workers (draft, WhatsApp) — run via tsx
 ├── packages/
-│   ├── ai-providers/               # AI provider adapter pattern (Logicc, Langdock, Anymize)
-│   ├── auth/                       # Supabase auth service & session management
-│   ├── database/                   # Supabase client, migrations, RLS policies
-│   ├── feature-flags/              # Feature flag architecture
-│   ├── jobs/                       # Background job abstraction
-│   ├── observability/              # Structured logger, metrics collector, audit logging
-│   └── security/                   # Config validation, secret sanitization
+│   ├── ai-providers/           # AI provider adapter pattern (Logicc, Langdock, Anymize)
+│   ├── auth/                   # Supabase auth service & session management
+│   ├── database/               # Supabase client, migrations, RLS policies
+│   ├── feature-flags/          # Feature flag architecture
+│   ├── jobs/                   # Background job abstraction
+│   ├── observability/          # Structured logger, metrics collector, audit logging
+│   ├── security/               # Config validation, secret sanitization
 ├── supabase/
-│   ├── migrations/                 # SQL migrations (RLS, triggers, audit tables)
-│   └── tests/                      # pgTAP test suites (RLS adversarial, invocations & ownership)
+│   ├── migrations/             # SQL migrations (RLS, triggers, audit tables)
 ├── docs/
-│   ├── adr/                        # Architecture Decision Records (ADR-001 to ADR-012)
-│   └── status/                     # Phase status reports
+│   ├── adr/                    # Architecture Decision Records (ADR-001 to ADR-012)
+│   ├── status/                 # Phase status reports
 │   ├── production_environment.md
 │   ├── turbo.json
-│   └── pnpm-workspace.yaml
-└── eslint.config.mjs
+│   ├── pnpm-workspace.yaml
+│   └── eslint.config.mjs
 ```
 
 ## Quick Start
@@ -67,9 +68,9 @@ cp .env.example .env.local
 Required variables:
 
 | Variable | Purpose | Exposure |
-|----------|---------|----------|
+|---------|---------|---------|
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL | Public (browser) |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon key | Public (browser) |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anonymous key | Public (browser) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key | **Secret** (server only) |
 | `LOGICC_API_KEY` | Logicc AI API key (primary draft provider) | **Secret** (server only) |
 | `LOGICC_ENDPOINT_URL` | Logicc endpoint URL | Server only |
@@ -80,7 +81,7 @@ Required variables:
 | `ANYMIZE_API_KEY` | Anymize AI API key (tertiary fallback provider) | **Secret** (server only) |
 | `ANYMIZE_ENDPOINT_URL` | Anymize endpoint (default: https://app.anymize.ai/api/v1/llm) | Server only |
 | `ANYMIZE_DEFAULT_MODEL` | Anymize model identifier (must be set when enabled) | Server only |
-| `GATEWAY_API_MASTER_KEY` | Mastra orchestrator API key | **Secret** (server only) |
+| `GATEWAY_API_MASTRA_KEY` | Mastra orchestrator API key | **Secret** (server only) |
 | `GATEWAY_API_URL` | Mastra endpoint | Server only |
 | `IONOS_API_KEY` | IonOS AI Assistant API | **Secret** (server only) |
 | `HUBSPOT_API_KEY` | HubSpot CRM API | **Secret** (server only) |
@@ -131,7 +132,7 @@ All checks must pass. No manual SQL modifications to production schema; all chan
 ## Architecture Decision Records
 
 | ADR | Title | Status |
-|------|-------|--------|
+|---------|---------|---------|
 | [ADR-001](docs/adr/ADR-001-monorepo-and-package-boundaries.md) | Monorepo and Package Boundaries | Accepted |
 | [ADR-002](docs/adr/ADR-002-supabase-authentication-strategy.md) | Supabase Authentication Strategy | Accepted |
 | [ADR-003](docs/adr/ADR-003-multi-tenant-organization-model.md) | Multi-Tenant Organization Model | Accepted |
@@ -159,6 +160,8 @@ All checks must pass. No manual SQL modifications to production schema; all chan
 - **Phase 3A** (Secure Inbound WhatsApp Foundation): Complete. Merged via commit `4c6551dd` on Aug 5, 2026. Local Docker gate passed: 131 application tests, 133 pgTAP assertions, production build, and typed SQLSTATE transport check all green.
 - **Phase 3B** (AI Draft Generation): Complete. Merged via PR #4 (commit `61b7a899`) on Aug 6, 2026, followed by PR #5 (staging readiness) on Aug 7, and PR #7 (three-provider failover chain: Logicc → Langdock → Anymize) on Aug 12. 267 tests passing, lint/typecheck/build green. The draft worker supports a three-provider failover chain with 25-second abort, structured ProviderError classification, and content privacy (sanitized metadata only in logs).
 - **PR #2** (Logger Secret Sanitization): Merged (squash) into main at commit `72ba4c2f` on Aug 12, 2026. Applies `sanitizeValue()` to `err.message` in the structured logger, preventing Bearer tokens and API keys in error messages from appearing in plaintext logs.
+- **PR #8** (Documentation Update): Merged (squash) into main at commit `e6f2e9e` on Aug 12, 2026. Updated README, ADR-006, ADR-009, and `.env.example` for Phase 3B completion and the three-provider failover chain. Added ADR-012.
+- **PR #10** (ESM/CJS Interop Fix): Merged (squash) into main at commit `4a79f02` on Aug 13, 2026. Removed `"type": "module"` from `apps/worker/package.json` to resolve `ERR_REQUIRE_ESM` crash-loop on staging. Internal packages remain CJS; workers execute via `tsx` which handles ESM syntax in CJS mode. Verified on staging: typecheck, lint, test (100/100), build all pass, both workers start cleanly.
 
 ## Contributing
 
