@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { defaultLogger } from '@tugpt/observability';
-import { createServerClient } from '@tugpt/database';
+import { createAuthenticatedServerClient } from '@/lib/supabase/server';
 import { AuthService } from '@tugpt/auth';
 
 export async function GET(request: Request) {
@@ -8,7 +8,7 @@ export async function GET(request: Request) {
   const rawTenantId = request.headers.get('x-tenant-id');
 
   try {
-    const supabase = createServerClient();
+    const supabase = await createAuthenticatedServerClient();
     const authService = new AuthService(supabase);
 
     const user = await authService.getCurrentUser();
