@@ -3,14 +3,14 @@ import { NextRequest } from 'next/server';
 import { classifyRoute, proxy } from './proxy';
 
 // Use vi.hoisted so the mock fn is available when the hoisted vi.mock factory runs
-const { mockGetSession } = vi.hoisted(() => ({
-  mockGetSession: vi.fn(),
+const { mockGetClaims } = vi.hoisted(() => ({
+  mockGetClaims: vi.fn(),
 }));
 
 vi.mock('@supabase/ssr', () => ({
   createServerClient: vi.fn(() => ({
     auth: {
-      getSession: mockGetSession,
+      getClaims: mockGetClaims,
     },
   })),
 }));
@@ -45,13 +45,13 @@ describe('Next.js 16 Proxy Route Classifier', () => {
 
 describe('Next.js 16 Proxy Execution', () => {
   beforeEach(() => {
-    mockGetSession.mockReset();
+    mockGetClaims.mockReset();
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://localhost:54321';
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'test-anon-key';
   });
 
   it('redirects unauthenticated users from protected routes to login', async () => {
-    mockGetSession.mockResolvedValueOnce({ data: { session: null } });
+    mockGetClaims.mockResolvedValueOnce({ data: null, error: { message: 'no session' } });
 
     const req = new NextRequest('http://localhost/dashboard');
     const res = await proxy(req);
@@ -60,9 +60,13 @@ describe('Next.js 16 Proxy Execution', () => {
     expect(res.headers.get('location')).toBe('http://localhost/auth/login?redirect=%2Fdashboard');
   });
 
-  it('allows authenticated users with valid session to access protected routes', async () => {
-    mockGetSession.mockResolvedValueOnce({
-      data: { session: { access_token: 'valid-token', user: { id: 'user-1' } } },
+  it('allows authenticated users with valid claims to access protected routes', async () => {
+    mockGetClaims.mockResolvedValueOnce({
+      data: {
+        claims: { sub: 'user-1', email: 'test@test.com', aud: 'authenticated' },
+        header: {},
+        signature: new Uint8Array(),
+      },
     });
 
     const req = new NextRequest('http://localhost/dashboard', {
