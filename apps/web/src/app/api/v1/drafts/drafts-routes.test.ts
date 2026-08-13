@@ -34,11 +34,18 @@ function createChainableMock(overrides?: {
 
 const mockFrom = vi.fn();
 
+// Mock the cookie-aware server client used by all draft routes
+vi.mock('@/lib/supabase/server', () => ({
+  createAuthenticatedServerClient: vi.fn(() =>
+    Promise.resolve({
+      rpc: mockRpc,
+      from: mockFrom,
+    })
+  ),
+}));
+
+// Still mock @tugpt/database for createAdminSupabaseClient (used in draft routes)
 vi.mock('@tugpt/database', () => ({
-  createServerClient: vi.fn(() => ({
-    rpc: mockRpc,
-    from: mockFrom,
-  })),
   createAdminSupabaseClient: vi.fn(() => ({
     rpc: mockAdminRpc,
   })),

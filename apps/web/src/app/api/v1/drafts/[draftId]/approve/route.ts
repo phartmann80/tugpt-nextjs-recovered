@@ -6,7 +6,8 @@
 
 import { NextResponse } from 'next/server';
 import { defaultLogger } from '@tugpt/observability';
-import { createServerClient, createAdminSupabaseClient } from '@tugpt/database';
+import { createAuthenticatedServerClient } from '@/lib/supabase/server';
+import { createAdminSupabaseClient } from '@tugpt/database';
 import { AuthService } from '@tugpt/auth';
 import { checkDraftFeatureGate } from '@/lib/draft-api/feature-gate';
 import { mapDraftRpcError } from '@/lib/draft-api/error-mapper';
@@ -33,7 +34,7 @@ export async function POST(
       return errorResponse(400, 'INVALID_UUID', 'Invalid draft ID format');
     }
 
-    const supabase = createServerClient();
+    const supabase = await createAuthenticatedServerClient();
     const authService = new AuthService(supabase);
     const user = await authService.getCurrentUser();
 
@@ -55,7 +56,6 @@ export async function POST(
       return errorResponse(gate.statusCode, 'FEATURE_UNAVAILABLE', gate.message);
     }
 
-    // Amendment 4: Parse and validate request body
     let body: { expectedLockVersion?: unknown };
     try {
       body = await request.json();
@@ -67,7 +67,6 @@ export async function POST(
       return errorResponse(400, 'INVALID_BODY', 'expectedLockVersion must be an integer');
     }
 
-    // Amendment 2: Confirm draft is visible under active org using user-session client
     const { data: draftRow, error: visibilityError } = await supabase
       .from('ai_drafts')
       .select('id')
@@ -79,7 +78,6 @@ export async function POST(
       return errorResponse(404, 'DRAFT_NOT_FOUND', 'Draft not found');
     }
 
-    // Call the RPC using only draftId and expectedLockVersion (no org argument)
     const { data, error: rpcError } = // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (supabase as any).rpc('approve_draft', {
       p_draft_id: draftId,

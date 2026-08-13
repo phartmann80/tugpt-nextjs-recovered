@@ -1,6 +1,24 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 import { classifyRoute, proxy } from './proxy';
+
+// Use vi.hoisted so the mock fn is available when the hoisted vi.mock factory runs
+const { mockGetClaims } = vi.hoisted(() => ({
+  mockGetClaims: vi.fn(),
+}));
+
+vi.mock('@supabase/ssr', () => ({
+  createServerClient: vi.fn(() => ({
+    auth: {
+      getClaims: mockGetClaims,
+    },
+  })),
+}));
+
+// Mock @tugpt/database to provide the Database type
+vi.mock('@tugpt/database', () => ({
+  Database: {},
+}));
 
 describe('Next.js 16 Proxy Route Classifier', () => {
   it('classifies /auth paths as auth routes', () => {
@@ -26,56 +44,62 @@ describe('Next.js 16 Proxy Route Classifier', () => {
 });
 
 describe('Next.js 16 Proxy Execution', () => {
-  it('redirects unauthenticated users from protected routes to login', () => {
+  beforeEach(() => {
+    mockGetClaims.mockReset();
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://localhost:54321';
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'test-anon-key';
+  });
+
+  it('redirects unauthenticated users from protected routes to login', async () => {
+    mockGetClaims.mockResolvedValueOnce({ data: null, error: { message: 'no session' } });
+
     const req = new NextRequest('http://localhost/dashboard');
-    const res = proxy(req);
+    const res = await proxy(req);
 
     expect(res.status).toBe(307);
     expect(res.headers.get('location')).toBe('http://localhost/auth/login?redirect=%2Fdashboard');
   });
 
-  it('allows authenticated users with session cookie (tugpt_session) to access protected routes', () => {
+  it('allows authenticated users with valid claims to access protected routes', async () => {
+    mockGetClaims.mockResolvedValueOnce({
+      data: {
+        claims: { sub: 'user-1', email: 'test@test.com', aud: 'authenticated' },
+        header: {},
+        signature: new Uint8Array(),
+      },
+    });
+
     const req = new NextRequest('http://localhost/dashboard', {
-      headers: { cookie: 'tugpt_session=test-session-token' },
+      headers: { cookie: 'sb-access-token=valid-token' },
     });
-    const res = proxy(req);
+    const res = await proxy(req);
 
     expect(res.status).toBe(200);
     expect(res.headers.get('x-request-id')).toMatch(/^req-/);
   });
 
-  it('allows authenticated users with Supabase access token (sb-access-token) to access protected routes', () => {
-    const req = new NextRequest('http://localhost/settings', {
-      headers: { cookie: 'sb-access-token=sb-test-token' },
-    });
-    const res = proxy(req);
-
-    expect(res.status).toBe(200);
-    expect(res.headers.get('x-request-id')).toMatch(/^req-/);
-  });
-
-  it('injects x-request-id and propagates x-tenant-id header when cookie is present', () => {
+  it('injects x-request-id and propagates x-tenant-id header when cookie is present', async () => {
     const req = new NextRequest('http://localhost/api/v1/health', {
       headers: {
         'x-request-id': 'custom-req-id-123',
         cookie: 'tugpt_tenant_id=org-uuid-456',
       },
     });
-    const res = proxy(req);
+    const res = await proxy(req);
 
     expect(res.status).toBe(200);
     expect(res.headers.get('x-request-id')).toBe('custom-req-id-123');
     expect(res.headers.get('x-tenant-id')).toBe('org-uuid-456');
   });
 
-  it('propagates x-tenant-id header when cookie is absent but header is present', () => {
+  it('propagates x-tenant-id header when cookie is absent but header is present', async () => {
     const req = new NextRequest('http://localhost/api/v1/health', {
       headers: {
         'x-request-id': 'custom-req-id-789',
         'x-tenant-id': 'org-uuid-789',
       },
     });
-    const res = proxy(req);
+    const res = await proxy(req);
 
     expect(res.status).toBe(200);
     expect(res.headers.get('x-request-id')).toBe('custom-req-id-789');

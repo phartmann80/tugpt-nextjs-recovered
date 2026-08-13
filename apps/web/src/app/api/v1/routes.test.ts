@@ -4,9 +4,19 @@ import { GET as orgsGET, POST as orgsPOST } from './organizations/route';
 
 const mockRpc = vi.fn();
 
+// Mock the cookie-aware server client used by all routes
+vi.mock('@/lib/supabase/server', () => ({
+  createAuthenticatedServerClient: vi.fn(() =>
+    Promise.resolve({
+      rpc: mockRpc,
+    })
+  ),
+}));
+
+// Still mock @tugpt/database for createAdminSupabaseClient (used in drafts routes)
 vi.mock('@tugpt/database', () => ({
-  createServerClient: vi.fn(() => ({
-    rpc: mockRpc,
+  createAdminSupabaseClient: vi.fn(() => ({
+    rpc: vi.fn(),
   })),
 }));
 
