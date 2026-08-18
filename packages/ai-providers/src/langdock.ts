@@ -2,9 +2,24 @@ import { metricsCollector } from '@tugpt/observability';
 import type { AIProviderAdapter, ChatMessage, CompletionOptions, CompletionResponse } from './adapter';
 import { ProviderError } from './errors';
 
+/**
+ * Langdock's auto model-routing identifier. As of the 2026-08-18
+ * single-provider decision (see ADR-006), TuGPT does not pin individual
+ * models — Langdock's `auto` mode selects the model per-request. This is
+ * the single, centralized source of that default: do not hardcode a model
+ * literal anywhere else. Callers that omit both `LangdockConfig.defaultModel`
+ * and `CompletionOptions.model` get this value.
+ */
+export const LANGDOCK_AUTO_MODEL = 'auto';
+
 export interface LangdockConfig {
   apiKey: string;
   endpointUrl?: string;
+  /**
+   * Overrides the model sent to Langdock. Defaults to LANGDOCK_AUTO_MODEL
+   * ('auto'). Only set this for a deliberate, reviewed exception — the
+   * standing policy is auto routing, not a pinned model.
+   */
   defaultModel?: string;
 }
 
@@ -17,7 +32,7 @@ export class LangdockAdapter implements AIProviderAdapter {
   constructor(config: LangdockConfig) {
     this.apiKey = config.apiKey;
     this.endpointUrl = config.endpointUrl || 'https://api.langdock.com/openai/eu/v1';
-    this.defaultModel = config.defaultModel || 'gpt-5.2';
+    this.defaultModel = config.defaultModel || LANGDOCK_AUTO_MODEL;
   }
 
   async generateCompletion(

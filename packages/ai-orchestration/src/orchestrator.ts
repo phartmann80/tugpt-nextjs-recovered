@@ -2,12 +2,26 @@
  * @file orchestrator.ts
  * @description Draft generation orchestrator with primary/fallback provider routing.
  *
- * Calls the primary provider (Logicc) with a 25-second AbortController timeout.
- * On a fallback-eligible error, calls the secondary fallback provider (Langdock)
- * with the same 25-second timeout. On a fallback-eligible error from the secondary,
- * calls the tertiary fallback provider (Anymize) with the same 25-second timeout.
- * On a fallback-prohibited error, returns the error immediately without calling
- * any further providers.
+ * As of the 2026-08-18 single-provider decision (see ADR-006), production
+ * wiring (apps/worker/src/draft-orchestrator-factory.ts) configures only a
+ * `primary` provider (Langdock) — no `fallback` or `tertiary`. This class
+ * still accepts them, kept intentionally so a fallback provider can be
+ * reintroduced later without an interface change; they are simply unused
+ * in the current configuration.
+ *
+ * Calls the primary provider with a 25-second AbortController timeout. If a
+ * `fallback` is configured and the primary returns a fallback-eligible
+ * error, calls the fallback with the same timeout; if a `tertiary` is also
+ * configured and the fallback also returns a fallback-eligible error, calls
+ * the tertiary. On a fallback-prohibited error, or when no further provider
+ * is configured, returns the error immediately.
+ *
+ * In the current single-provider configuration, any primary failure —
+ * transient or terminal — is returned as-is. There is no in-process
+ * hand-off to a next provider. Transient categories are retried by the
+ * caller (apps/worker/src/draft-worker.ts) via the PGMQ visibility-timeout
+ * retry policy (5s, then 15s, then archive); terminal categories archive
+ * immediately. See that file for the full retry/archive lifecycle.
  *
  * Validates output: non-empty and within maxDraftLength (character limit).
  * A separate conservative provider-token limit is used for the maxTokens
@@ -32,22 +46,26 @@ const PROVIDER_TIMEOUT_MS = 25_000;
 const CONSERVATIVE_TOKEN_LIMIT = 1024;
 
 export interface DraftOrchestratorConfig {
-  /** Primary provider adapter (Logicc). */
+  /** The sole configured provider in the current architecture (Langdock). */
   primary: AIProviderAdapter;
-  /** Secondary fallback provider adapter (Langdock). */
-  fallback: AIProviderAdapter;
-  /** Tertiary fallback provider adapter (Anymize). Optional for backward compatibility. */
+  /**
+   * Optional secondary fallback provider. Not configured in production
+   * today — see the file header. When omitted, any primary failure is
+   * returned as-is; no hand-off is attempted.
+   */
+  fallback?: AIProviderAdapter;
+  /** Optional tertiary fallback provider. Only meaningful when `fallback` is also set. */
   tertiary?: AIProviderAdapter;
 }
 
 export class DraftOrchestrator {
   private primary: AIProviderAdapter;
-  private fallback: AIProviderAdapter;
+  private fallback: AIProviderAdapter | null;
   private tertiary: AIProviderAdapter | null;
 
   constructor(config: DraftOrchestratorConfig) {
     this.primary = config.primary;
-    this.fallback = config.fallback;
+    this.fallback = config.fallback ?? null;
     this.tertiary = config.tertiary ?? null;
   }
 
@@ -57,10 +75,12 @@ export class DraftOrchestrator {
    * Returns a DraftGenerationResult: success with text/provider/model/latency,
    * or failure with a structured ProviderError.
    *
-   * Provider chain: Logicc -> Langdock -> Anymize
-   * Fallback happens inside one queue delivery. The PGMQ retry lifecycle
-   * (attempt 1 -> 5s, attempt 2 -> 15s, attempt 3 -> archive) is preserved
-   * at the worker level, not here.
+   * Current production configuration: single provider (Langdock), no
+   * fallback/tertiary. If `fallback` is configured (not the case in
+   * production today), the chain is primary -> fallback -> tertiary.
+   * Any hand-off happens inside one queue delivery. The PGMQ retry
+   * lifecycle (attempt 1 -> 5s, attempt 2 -> 15s, attempt 3 -> archive) is
+   * preserved at the worker level, not here.
    */
   async generateDraft(request: DraftRequest): Promise<DraftGenerationResult> {
     const messages = buildPromptMessages(request.sourceMessageText, request.config);
@@ -71,11 +91,19 @@ export class DraftOrchestrator {
       requestId: request.requestId,
     };
 
-    // Attempt primary provider (Logicc) with 25s timeout
+    // Attempt the configured provider with a 25s timeout.
     const primaryResult = await this.callProvider(this.primary, messages, options);
 
     if (primaryResult.success) {
       return this.validateOutput(primaryResult.response, request.config.maxDraftLength);
+    }
+
+    // Single-provider mode: no fallback configured. The primary's error —
+    // transient or terminal — is final for this call. There is no next
+    // provider to hand off to; the caller (draft-worker.ts) applies the
+    // PGMQ retry/archive policy based on the error category.
+    if (!this.fallback) {
+      return { success: false, error: primaryResult.error };
     }
 
     // Check if fallback is allowed for this error category
@@ -85,7 +113,8 @@ export class DraftOrchestrator {
       return { success: false, error: primaryResult.error };
     }
 
-    // Attempt secondary fallback provider (Langdock) with 25s timeout
+    // Attempt the configured secondary fallback provider with a 25s timeout.
+    // (Not configured in production today — see the file header.)
     const fallbackResult = await this.callProvider(this.fallback, messages, options);
 
     if (fallbackResult.success) {
@@ -104,14 +133,15 @@ export class DraftOrchestrator {
       return { success: false, error: fallbackResult.error };
     }
 
-    // Attempt tertiary fallback provider (Anymize) with 25s timeout
+    // Attempt the configured tertiary fallback provider with a 25s timeout.
+    // (Not configured in production today — see the file header.)
     const tertiaryResult = await this.callProvider(this.tertiary, messages, options);
 
     if (tertiaryResult.success) {
       return this.validateOutput(tertiaryResult.response, request.config.maxDraftLength);
     }
 
-    // All three providers failed: return the tertiary error
+    // All configured providers failed: return the tertiary's error.
     return { success: false, error: tertiaryResult.error };
   }
 
