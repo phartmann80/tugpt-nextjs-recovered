@@ -1,0 +1,20 @@
+# Keep Docker build contexts small and avoid leaking local state/secrets
+# into images. Build contexts are the monorepo root (see apps/web/Dockerfile
+# and apps/worker/Dockerfile).
+
+**/node_modules
+**/.next
+**/dist
+**/.turbo
+.git
+.github
+
+# Local env files must never be baked into an image. Only .env.example
+# (which contains no real values) is safe to keep.
+.env
+.env.*
+!.env.example
+
+*.log
+npm-debug.log*
+.DS_Store

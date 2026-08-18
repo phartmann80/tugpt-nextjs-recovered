@@ -1,0 +1,85 @@
+# docker-compose.yml
+#
+# Production runtime for TuGPT.ai on its dedicated VPS (212.227.44.13 —
+# see docs/production_environment.md, section 5, for the full deployment
+# runbook, including the cutover plan from the existing systemd-native
+# workers to this stack). Intended to be run from /opt/tugpt as:
+#
+#   docker compose -p tugpt up -d --build
+#
+# The explicit `-p tugpt` project name namespaces containers/networks
+# under a stable, predictable prefix regardless of what else runs on the
+# host.
+#
+# Secrets and per-environment config are NOT stored in this repo and are
+# NOT baked into images. Every service loads its environment at container
+# start via `env_file`, from a file that lives only on the host, under
+# /etc/tugpt/ (root-owned, 0600) — never committed to git. This matches
+# the existing systemd-native workers' env layout
+# (/etc/tugpt/web.env, /etc/tugpt/worker.env) so the cutover doesn't
+# require re-provisioning secrets.
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: tugpt-web:latest
+    restart: unless-stopped
+    env_file:
+      - /etc/tugpt/web.env
+    # Bind to loopback only; an external reverse proxy (nginx/Caddy, not
+    # part of this repo) terminates TLS on 80/443 and forwards to 3001.
+    # No container here should bind 0.0.0.0:80 or 0.0.0.0:443 directly.
+    ports:
+      - "127.0.0.1:3001:3000"
+    networks:
+      - tugpt
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  whatsapp-worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    image: tugpt-worker:latest
+    restart: unless-stopped
+    command: ["node", "dist/index.js"]
+    env_file:
+      - /etc/tugpt/worker.env
+    networks:
+      - tugpt
+    # Give in-flight work time to finish on SIGTERM before Docker sends
+    # SIGKILL (default grace period is only 10s). This worker's unit of
+    # work is one process_inbound_message RPC call — bounded by DB
+    # latency, but 30s (matching WORKER_VISIBILITY_TIMEOUT_SECONDS) is a
+    # safe margin above the default.
+    stop_grace_period: 30s
+
+  draft-worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    image: tugpt-worker:latest
+    restart: unless-stopped
+    command: ["node", "dist/draft-index.js"]
+    env_file:
+      - /etc/tugpt/worker.env
+    networks:
+      - tugpt
+    # SIGTERM only aborts the poll loop between jobs (see
+    # apps/worker/src/draft-worker.ts) — it does NOT cancel an in-flight
+    # processJob() call. A single draft job can chain through all three
+    # providers (Logicc -> Langdock -> Anymize) at up to 25s each before
+    # failing over, so worst case is ~75s. 90s gives that headroom before
+    # Docker's default 10s grace period would otherwise SIGKILL the
+    # worker mid-job.
+    stop_grace_period: 90s
+
+networks:
+  tugpt:
+    driver: bridge
