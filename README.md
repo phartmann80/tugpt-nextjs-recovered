@@ -35,7 +35,7 @@ tugpt-nextjs-recovered/
 ├── supabase/
 │   ├── migrations/             # SQL migrations (RLS, triggers, audit tables)
 ├── docs/
-│   ├── adr/                    # Architecture Decision Records (ADR-001 to ADR-013)
+│   ├── adr/                    # Architecture Decision Records (ADR-001 to ADR-014)
 │   ├── status/                 # Phase status reports
 │   ├── production_environment.md
 │   ├── turbo.json
@@ -142,13 +142,14 @@ for the deployment runbook (`docker-compose.yml`, `deploy/systemd/tugpt.service`
 | [ADR-004](docs/adr/ADR-004-rls-and-private-helper-functions.md) | RLS and Private Helper Functions | Accepted |
 | [ADR-005](docs/adr/ADR-005-active-organization-context.md) | Active Organization Context | Accepted |
 | [ADR-006](docs/adr/ADR-006-provider-adapter-architecture.md) | Provider Adapter Architecture | Provisional |
-| [ADR-007](docs/adr/ADR-007-background-job-abstraction.md) | Background Job Abstraction | Accepted |
+| [ADR-007](docs/adr/ADR-007-background-job-abstraction.md) | Background Job Abstraction | Accepted (amended by ADR-014) |
 | [ADR-008](docs/adr/ADR-008-api-versioning-and-authorization.md) | API Versioning and Authorization | Accepted |
 | [ADR-009](docs/adr/ADR-009-observability-and-audit-logging.md) | Observability and Audit Logging | Accepted |
 | [ADR-010](docs/adr/ADR-010-feature-flag-architecture.md) | Feature Flag Architecture | Accepted |
 | [ADR-011](docs/adr/ADR-011-secure-inbound-whatsapp-foundation.md) | Secure Inbound WhatsApp Foundation | Accepted |
 | [ADR-012](docs/adr/ADR-012-three-provider-failover-chain.md) | Three-Provider Failover Chain | Superseded by ADR-006 |
 | [ADR-013](docs/adr/ADR-013-vps-docker-deployment-target.md) | VPS + Docker Compose Deployment Target (Replacing Vercel) | Accepted |
+| [ADR-014](docs/adr/ADR-014-pgmq-production-queue-backend.md) | PGMQ as the Production Queue Backend | Accepted |
 
 ## Security
 
@@ -168,7 +169,8 @@ for the deployment runbook (`docker-compose.yml`, `deploy/systemd/tugpt.service`
 - **PR #10** (ESM/CJS Interop Fix): Merged (squash) into main at commit `4a79f02` on Aug 13, 2026. Removed `"type": "module"` from `apps/worker/package.json` to resolve `ERR_REQUIRE_ESM` crash-loop on staging. Internal packages remain CJS; workers execute via `tsx` which handles ESM syntax in CJS mode. Verified on staging: typecheck, lint, test (100/100), build all pass, both workers start cleanly.
 - **PR #13** (Docker Compose deployment): Merged into `main` (merge commit `4092f48`) on Aug 18, 2026. Adds `apps/web/Dockerfile`, `apps/worker/Dockerfile`, `docker-compose.yml`, and a `docker-build` CI job, targeting the VPS deployment described below instead of Vercel.
 - **PR #14** (Vercel cleanup, VPS runbook, ADR-013): Merged into `main` (merge commit `de1fe63`) on Aug 18, 2026, immediately after PR #13. Removes `vercel.json`, rewrites `docs/production_environment.md` §5 and ADR-013 for the real target (`212.227.44.13`), and adds the systemd-to-Docker-Compose cutover plan and pre-deploy security checklist.
-- **Provider simplification** (2026-08-18): TuGPT moved from the three-provider failover chain to Langdock as the sole provider — Logicc cut (cost), Anymize removed (cross-project isolation), model selection set to Langdock's auto routing (never pinned). See [ADR-006](docs/adr/ADR-006-provider-adapter-architecture.md) (rewritten) and [ADR-012](docs/adr/ADR-012-three-provider-failover-chain.md) (superseded). `LogiccAdapter` and `AnymizeAdapter` remain in the repo, unimported by production wiring. Milestone #1 (first end-to-end AI draft in staging) is gated on this change being approved and merged, and on the running staging workers' environment being updated to match.
+- **Provider simplification** (2026-08-18): TuGPT moved from the three-provider failover chain to Langdock as the sole provider — Logicc cut (cost), Anymize removed (cross-project isolation), model selection set to Langdock's auto routing (never pinned). See [ADR-006](docs/adr/ADR-006-provider-adapter-architecture.md) (rewritten) and [ADR-012](docs/adr/ADR-012-three-provider-failover-chain.md) (superseded). `LogiccAdapter` and `AnymizeAdapter` remain in the repo, unimported by production wiring. Merged into `main` via PR #15 on Aug 18, 2026; `build-and-test` and `docker-build` both green on `main`. Milestone #1 (first end-to-end AI draft in staging) remains gated on the running staging workers' environment being confirmed updated with the live Langdock config, not just the repo.
+- **Job-queue backend pinned** (2026-08-18): [ADR-014](docs/adr/ADR-014-pgmq-production-queue-backend.md) documents PGMQ (the Postgres extension, via Supabase) as the confirmed production queue backend for both `whatsapp_inbound` and `draft_generation`, resolving the "BullMQ/Redis or PgBoss" ambiguity left open in [ADR-007](docs/adr/ADR-007-background-job-abstraction.md). Documentation only, no code changes.
 
 ## Contributing
 
