@@ -1,9 +1,9 @@
 # ADR-012: Three-Provider Failover Chain
 
 ## Status
-Accepted
+**Superseded by [ADR-006](./ADR-006-provider-adapter-architecture.md) (2026-08-18).** The owner made a final provider decision on 2026-08-18: TuGPT runs on Langdock only. Logicc was cut entirely (cost — billing was far too expensive); Anymize was removed from TuGPT specifically to avoid cross-project coupling with its use on other projects. The three-provider chain described below no longer exists in production wiring. This document is kept as a historical record of the prior decision; see ADR-006 for the current architecture, including the explicit note that reintroducing a fallback provider later remains an open option.
 
-## Context
+## Context (historical)
 Phase 3B introduced AI draft generation with a single provider (Langdock). Production reliability requires that a draft request still succeeds when the primary provider is down, rate-limited, or returning errors. A single-provider design creates a hard dependency on one external service with no fallback.
 
 ## Decision

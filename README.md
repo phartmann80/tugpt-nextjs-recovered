@@ -12,7 +12,7 @@ AI-powered platform built with Next.js 16, React 19, and Supabase. Phase 3A (Sec
 | UI | React 19, Tailwind CSS 4, Radix UI (shadcn/ui) |
 | Language | TypeScript 5.4+ (strict mode) |
 | Database & Auth | Supabase (PostgreSQL, RLS, GoTrue) |
-| AI providers | Logicc, Langdock, Anymize (via adapter pattern) |
+| AI providers | Langdock (sole provider, auto model routing — see [ADR-006](docs/adr/ADR-006-provider-adapter-architecture.md)) |
 | Worker runtime | tsx (ESM syntax in CJS mode, no `"type": "module"`) |
 | Testing | Vitest (JS/TS), pgTAP (SQL) |
 | Linting | ESLint 9 (flat config) |
@@ -25,7 +25,7 @@ tugpt-nextjs-recovered/
 │   ├── web/                    # Next.js application
 │   └── worker/                 # Background workers (draft, WhatsApp) — run via tsx
 ├── packages/
-│   ├── ai-providers/           # AI provider adapter pattern (Logicc, Langdock, Anymize)
+│   ├── ai-providers/           # AI provider adapter pattern (active: Langdock; Logicc/Anymize adapters retained, unused)
 │   ├── auth/                   # Supabase auth service & session management
 │   ├── database/               # Supabase client, migrations, RLS policies
 │   ├── feature-flags/          # Feature flag architecture
@@ -72,19 +72,14 @@ Required variables:
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL | Public (browser) |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anonymous key | Public (browser) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key | **Secret** (server only) |
-| `LOGICC_API_KEY` | Logicc AI API key (primary draft provider) | **Secret** (server only) |
-| `LOGICC_ENDPOINT_URL` | Logicc endpoint URL | Server only |
-| `LOGICC_DEFAULT_MODEL` | Logicc model identifier | Server only |
-| `LANGDOCK_API_CODE` | Langdock API key (secondary draft provider) | **Secret** (server only) |
-| `LANGDOCK_ENDPOINT_URL` | Langdock endpoint | Server only |
-| `MODEL` | Langdock model | Server only |
-| `ANYMIZE_API_KEY` | Anymize AI API key (tertiary fallback provider) | **Secret** (server only) |
-| `ANYMIZE_ENDPOINT_URL` | Anymize endpoint (default: https://app.anymize.ai/api/v1/llm) | Server only |
-| `ANYMIZE_DEFAULT_MODEL` | Anymize model identifier (must be set when enabled) | Server only |
+| `LANGDOCK_API_CODE` | Langdock API key (sole draft provider — see [ADR-006](docs/adr/ADR-006-provider-adapter-architecture.md)) | **Secret** (server only) |
+| `LANGDOCK_ENDPOINT_URL` | Langdock endpoint (optional, has a default) | Server only |
 | `GATEWAY_API_MASTRA_KEY` | Mastra orchestrator API key | **Secret** (server only) |
 | `GATEWAY_API_URL` | Mastra endpoint | Server only |
 | `IONOS_API_KEY` | IonOS AI Assistant API | **Secret** (server only) |
 | `HUBSPOT_API_KEY` | HubSpot CRM API | **Secret** (server only) |
+
+No `LOGICC_*`, `ANYMIZE_*`, or `MODEL` variables are needed: Logicc and Anymize were removed on 2026-08-18 (cost and cross-project isolation, respectively), and Langdock is never pinned to a specific model — it always uses Langdock's `auto` routing. See ADR-006.
 
 See `docs/production_environment.md` for the full security hardening guide.
 
@@ -146,13 +141,13 @@ for the deployment runbook (`docker-compose.yml`, `deploy/systemd/tugpt.service`
 | [ADR-003](docs/adr/ADR-003-multi-tenant-organization-model.md) | Multi-Tenant Organization Model | Accepted |
 | [ADR-004](docs/adr/ADR-004-rls-and-private-helper-functions.md) | RLS and Private Helper Functions | Accepted |
 | [ADR-005](docs/adr/ADR-005-active-organization-context.md) | Active Organization Context | Accepted |
-| [ADR-006](docs/adr/ADR-006-provider-adapter-architecture.md) | Provider Adapter Architecture | Accepted |
+| [ADR-006](docs/adr/ADR-006-provider-adapter-architecture.md) | Provider Adapter Architecture | Provisional |
 | [ADR-007](docs/adr/ADR-007-background-job-abstraction.md) | Background Job Abstraction | Accepted |
 | [ADR-008](docs/adr/ADR-008-api-versioning-and-authorization.md) | API Versioning and Authorization | Accepted |
 | [ADR-009](docs/adr/ADR-009-observability-and-audit-logging.md) | Observability and Audit Logging | Accepted |
 | [ADR-010](docs/adr/ADR-010-feature-flag-architecture.md) | Feature Flag Architecture | Accepted |
 | [ADR-011](docs/adr/ADR-011-secure-inbound-whatsapp-foundation.md) | Secure Inbound WhatsApp Foundation | Accepted |
-| [ADR-012](docs/adr/ADR-012-three-provider-failover-chain.md) | Three-Provider Failover Chain | Accepted |
+| [ADR-012](docs/adr/ADR-012-three-provider-failover-chain.md) | Three-Provider Failover Chain | Superseded by ADR-006 |
 | [ADR-013](docs/adr/ADR-013-vps-docker-deployment-target.md) | VPS + Docker Compose Deployment Target (Replacing Vercel) | Accepted |
 
 ## Security
@@ -171,7 +166,9 @@ for the deployment runbook (`docker-compose.yml`, `deploy/systemd/tugpt.service`
 - **PR #2** (Logger Secret Sanitization): Merged (squash) into main at commit `72ba4c2f` on Aug 12, 2026. Applies `sanitizeValue()` to `err.message` in the structured logger, preventing Bearer tokens and API keys in error messages from appearing in plaintext logs.
 - **PR #8** (Documentation Update): Merged (squash) into main at commit `e6f2e9e` on Aug 12, 2026. Updated README, ADR-006, ADR-009, and `.env.example` for Phase 3B completion and the three-provider failover chain. Added ADR-012.
 - **PR #10** (ESM/CJS Interop Fix): Merged (squash) into main at commit `4a79f02` on Aug 13, 2026. Removed `"type": "module"` from `apps/worker/package.json` to resolve `ERR_REQUIRE_ESM` crash-loop on staging. Internal packages remain CJS; workers execute via `tsx` which handles ESM syntax in CJS mode. Verified on staging: typecheck, lint, test (100/100), build all pass, both workers start cleanly.
-- **PR #13** (Docker Compose deployment): Adds `apps/web/Dockerfile`, `apps/worker/Dockerfile`, `docker-compose.yml`, and a `docker-build` CI job, targeting the VPS deployment described below instead of Vercel.
+- **PR #13** (Docker Compose deployment): Merged into `main` (merge commit `4092f48`) on Aug 18, 2026. Adds `apps/web/Dockerfile`, `apps/worker/Dockerfile`, `docker-compose.yml`, and a `docker-build` CI job, targeting the VPS deployment described below instead of Vercel.
+- **PR #14** (Vercel cleanup, VPS runbook, ADR-013): Merged into `main` (merge commit `de1fe63`) on Aug 18, 2026, immediately after PR #13. Removes `vercel.json`, rewrites `docs/production_environment.md` §5 and ADR-013 for the real target (`212.227.44.13`), and adds the systemd-to-Docker-Compose cutover plan and pre-deploy security checklist.
+- **Provider simplification** (2026-08-18): TuGPT moved from the three-provider failover chain to Langdock as the sole provider — Logicc cut (cost), Anymize removed (cross-project isolation), model selection set to Langdock's auto routing (never pinned). See [ADR-006](docs/adr/ADR-006-provider-adapter-architecture.md) (rewritten) and [ADR-012](docs/adr/ADR-012-three-provider-failover-chain.md) (superseded). `LogiccAdapter` and `AnymizeAdapter` remain in the repo, unimported by production wiring. Milestone #1 (first end-to-end AI draft in staging) is gated on this change being approved and merged, and on the running staging workers' environment being updated to match.
 
 ## Contributing
 

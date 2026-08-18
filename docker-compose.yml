@@ -73,11 +73,13 @@ services:
       - tugpt
     # SIGTERM only aborts the poll loop between jobs (see
     # apps/worker/src/draft-worker.ts) — it does NOT cancel an in-flight
-    # processJob() call. A single draft job can chain through all three
-    # providers (Logicc -> Langdock -> Anymize) at up to 25s each before
-    # failing over, so worst case is ~75s. 90s gives that headroom before
-    # Docker's default 10s grace period would otherwise SIGKILL the
-    # worker mid-job.
+    # processJob() call. As of the 2026-08-18 single-provider decision
+    # (see ADR-006), TuGPT calls only Langdock per attempt (~25s worst
+    # case, down from ~75s under the old three-provider chain), plus
+    # surrounding DB RPC calls (quota reservation, draft storage). 90s
+    # stays as a conservative margin above that before Docker's default
+    # 10s grace period would otherwise SIGKILL the worker mid-job; revisit
+    # downward only as a deliberate, separate change if ever needed.
     stop_grace_period: 90s
 
 networks:
