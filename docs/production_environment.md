@@ -13,16 +13,12 @@ Every production environment deployment requires the following variables to be e
 | `NEXT_PUBLIC_SUPABASE_URL` | Production Supabase Project URL | Publicly accessible in browser. |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Production Supabase Anonymous Key | Publicly accessible in browser. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Production Supabase Service Role Key | **SECRET**. Server-side only. Must NEVER leak to client-side bundles. |
-| `LOGICC_API_KEY` | Production Logicc AI API Key (primary draft provider) | **SECRET**. Server-side only. |
-| `LOGICC_ENDPOINT_URL` | Production Logicc Endpoint URL | Server-side only. |
-| `LOGICC_DEFAULT_MODEL` | Production Logicc Model Identifier | Server-side only. |
-| `LANGDOCK_API_CODE` | Production Langdock Integration API Key (secondary draft provider) | **SECRET**. Server-side only. |
-| `LANGDOCK_ENDPOINT_URL` | Production Langdock Endpoint URL | Server-side only. |
-| `ANYMIZE_API_KEY` | Production Anymize AI API Key (tertiary fallback provider) | **SECRET**. Server-side only. |
-| `ANYMIZE_ENDPOINT_URL` | Production Anymize Endpoint URL (default: https://app.anymize.ai/api/v1/llm) | Server-side only. |
-| `ANYMIZE_DEFAULT_MODEL` | Production Anymize Model Identifier (must be set when enabled) | Server-side only. |
+| `LANGDOCK_API_CODE` | Production Langdock Integration API Key (sole draft provider, see ADR-006) | **SECRET**. Server-side only. |
+| `LANGDOCK_ENDPOINT_URL` | Production Langdock Endpoint URL (optional — defaults to `https://api.langdock.com/openai/eu/v1`) | Server-side only. |
 | `GATEWAY_API_MASTRA_KEY` | Production Mastra Orchestrator API Key | **SECRET**. Server-side only. |
 | `GATEWAY_API_URL` | Production Mastra Endpoint URL | Server-side only. |
+
+**Removed as of 2026-08-18 (see ADR-006):** `LOGICC_API_KEY`, `LOGICC_ENDPOINT_URL`, `LOGICC_DEFAULT_MODEL`, `ANYMIZE_API_KEY`, `ANYMIZE_ENDPOINT_URL`, `ANYMIZE_DEFAULT_MODEL`, and `MODEL` are no longer read anywhere in the codebase. Logicc was cut for cost; Anymize was removed to avoid cross-project coupling (it remains in use on other projects); model selection is Langdock's `auto` routing, not a pinned value, so no model env var is needed. Do not add these back without a separate, explicit decision.
 
 ---
 
@@ -167,5 +163,5 @@ docker compose -p tugpt logs -f   # watch startup
 
 ### 5.6 Explicitly not part of this deployment work
 
-- Logicc credentials are still pending; `ai_draft_generation` stays `false`. Nothing here changes that.
+- Langdock production credentials and enabling `ai_draft_generation` are handled separately, gated on the provider simplification PR (see ADR-006) being approved and merged, and on the running staging workers' env being updated — not just the repo. Nothing here changes that.
 - `whatsapp_integration` stays `false`. This section covers *where the app runs*, not turning features on.

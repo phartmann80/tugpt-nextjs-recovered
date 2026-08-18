@@ -581,45 +581,13 @@ describe('DraftWorker', () => {
   });
 
   // --- Stage 8A: Safe-disabled startup correction tests ---
+  // Updated 2026-08-18 for the single-provider (Langdock-only) architecture
+  // — see ADR-006. The prior two tests here (T8A-1, T8A-2) separately
+  // exercised missing-Logicc and missing-Langdock configuration; with
+  // Logicc removed, only Langdock configuration applies, so they're
+  // consolidated into one test.
 
-  // T8A-1: Worker starts without Logicc credentials while feature disabled
-  it('starts and processes jobs without Logicc credentials when feature is disabled', async () => {
-    const rpcConfig: MockRpcConfig = {
-      is_feature_enabled: { data: false, error: null },
-      skip_draft_job: { data: true, error: null },
-    };
-    const queryConfig: MockQueryConfig = {
-      draft_generation_jobs: {
-        filters: { id: MOCK_JOB_ID },
-        data: MOCK_JOB_ROW,
-      },
-    };
-    const client = createMockClient(rpcConfig, queryConfig);
-
-    // Factory that would throw if called (simulating missing Logicc credentials)
-    const factory = vi.fn(() => {
-      throw new Error('Missing Logicc provider configuration');
-    });
-
-    const worker = new DraftWorker(client, factory, {
-      pollIntervalMs: 100,
-      visibilityTimeoutSeconds: 30,
-    });
-
-    // Should process the job without calling the factory
-    await (worker as unknown as { processJob: (job: unknown) => Promise<void> }).processJob(MOCK_QUEUE_MESSAGE);
-
-    // Factory must NOT have been called (feature disabled)
-    expect(factory).not.toHaveBeenCalled();
-
-    // Job should be skipped with FEATURE_DISABLED
-    const rpcCalls = (client as unknown as { rpc: { mock: { calls: unknown[] } } }).rpc.mock.calls;
-    const skipCall = rpcCalls.find((c: unknown[]) => c[0] === 'skip_draft_job');
-    expect(skipCall).toBeDefined();
-    expect(skipCall[1].p_skip_reason).toBe('FEATURE_DISABLED');
-  });
-
-  // T8A-2: Worker starts without Langdock credentials while feature disabled
+  // T8A-1: Worker starts without Langdock credentials while feature disabled
   it('starts and processes jobs without Langdock credentials when feature is disabled', async () => {
     const rpcConfig: MockRpcConfig = {
       is_feature_enabled: { data: false, error: null },
@@ -635,7 +603,7 @@ describe('DraftWorker', () => {
 
     // Factory that would throw if called (simulating missing Langdock credentials)
     const factory = vi.fn(() => {
-      throw new Error('Missing Langdock fallback configuration');
+      throw new Error('Missing Langdock provider configuration');
     });
 
     const worker = new DraftWorker(client, factory, {
@@ -643,11 +611,13 @@ describe('DraftWorker', () => {
       visibilityTimeoutSeconds: 30,
     });
 
+    // Should process the job without calling the factory
     await (worker as unknown as { processJob: (job: unknown) => Promise<void> }).processJob(MOCK_QUEUE_MESSAGE);
 
-    // Factory must NOT have been called
+    // Factory must NOT have been called (feature disabled)
     expect(factory).not.toHaveBeenCalled();
 
+    // Job should be skipped with FEATURE_DISABLED
     const rpcCalls = (client as unknown as { rpc: { mock: { calls: unknown[] } } }).rpc.mock.calls;
     const skipCall = rpcCalls.find((c: unknown[]) => c[0] === 'skip_draft_job');
     expect(skipCall).toBeDefined();
@@ -688,7 +658,7 @@ describe('DraftWorker', () => {
     expect(reserveCall).toBeUndefined();
   });
 
-  // T8A-4: Feature enabled + missing Logicc configuration fails through approved config-error handling
+  // T8A-4: Feature enabled + missing Langdock configuration fails through approved config-error handling
   it('archives with DRAFT_PROVIDER_CONFIG_ERROR when feature enabled but provider config missing', async () => {
     const rpcConfig: MockRpcConfig = {
       is_feature_enabled: { data: true, error: null },
@@ -702,9 +672,9 @@ describe('DraftWorker', () => {
     };
     const client = createMockClient(rpcConfig, queryConfig);
 
-    // Factory that throws because Logicc credentials are missing
+    // Factory that throws because Langdock credentials are missing
     const factory = vi.fn(() => {
-      throw new Error('Missing Logicc provider configuration');
+      throw new Error('Missing Langdock provider configuration');
     });
 
     const worker = new DraftWorker(client, factory, {
@@ -733,9 +703,8 @@ describe('DraftWorker', () => {
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    const FAKE_LOGICC_KEY = 'sk-logicc-secret-key-12345';
     const FAKE_LANGDOCK_KEY = 'ld-secret-key-67890';
-    const FAKE_LOGICC_URL = 'https://api.logicc.example.com';
+    const FAKE_LANGDOCK_URL = 'https://api.langdock.example.com';
 
     const rpcConfig: MockRpcConfig = {
       is_feature_enabled: { data: true, error: null },
@@ -751,7 +720,7 @@ describe('DraftWorker', () => {
 
     // Factory that throws, simulating missing config, but with credential-like values in the error
     const factory = vi.fn(() => {
-      throw new Error(`Missing Logicc provider configuration: ${FAKE_LOGICC_KEY}`);
+      throw new Error(`Missing Langdock provider configuration: ${FAKE_LANGDOCK_KEY} ${FAKE_LANGDOCK_URL}`);
     });
 
     const worker = new DraftWorker(client, factory, {
@@ -767,9 +736,8 @@ describe('DraftWorker', () => {
     ].join(' ');
 
     // Credential values must never appear in logs
-    expect(allLogs).not.toContain(FAKE_LOGICC_KEY);
     expect(allLogs).not.toContain(FAKE_LANGDOCK_KEY);
-    expect(allLogs).not.toContain(FAKE_LOGICC_URL);
+    expect(allLogs).not.toContain(FAKE_LANGDOCK_URL);
 
     consoleSpy.mockRestore();
     consoleErrorSpy.mockRestore();

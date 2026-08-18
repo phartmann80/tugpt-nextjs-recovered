@@ -1,3 +1,22 @@
+/**
+ * @file orchestrator.test.ts
+ * @description DraftOrchestrator tests.
+ *
+ * Reworked 2026-08-18 for the single-provider (Langdock-only) architecture
+ * — see ADR-006. Production wiring (apps/worker/src/draft-orchestrator-factory.ts)
+ * configures only `primary`; no `fallback`/`tertiary`. The "single-provider
+ * mode" describe block below is the primary coverage and matches production.
+ *
+ * The "fallback-capable (reintroduction)" describe block is reduced,
+ * generic-naming coverage proving DraftOrchestrator still correctly chains
+ * to a fallback/tertiary when configured — kept so the capability to
+ * reintroduce a fallback provider later (per ADR-006) doesn't silently
+ * regress, even though nothing in production configures it today. The
+ * three-provider-chain-specific test suite (orchestrator-three-provider.test.ts,
+ * written for the retired Logicc → Langdock → Anymize chain) was removed
+ * rather than reworked, since its scenarios are now redundant with this
+ * reduced fallback-capability coverage.
+ */
 import { describe, it, expect } from 'vitest';
 import { DraftOrchestrator } from '../src/orchestrator';
 import type { AIProviderAdapter, CompletionResponse, ChatMessage, CompletionOptions } from '@tugpt/ai-providers';
@@ -6,10 +25,24 @@ import type { DraftRequest, DraftConfig } from '../src/types';
 
 // --- Mock helpers ---
 
-function createMockAdapter(
-  providerName: string,
-  behavior: 'success' | 'fail-500' | 'fail-401' | 'fail-403' | 'fail-400' | 'fail-404' | 'fail-422' | 'fail-408' | 'fail-429' | 'timeout' | 'network' | 'empty' | 'oversized' | 'invalid-config' | 'malformed'
-): AIProviderAdapter & { calls: number } {
+type Behavior =
+  | 'success'
+  | 'fail-500'
+  | 'fail-401'
+  | 'fail-403'
+  | 'fail-400'
+  | 'fail-404'
+  | 'fail-422'
+  | 'fail-408'
+  | 'fail-429'
+  | 'timeout'
+  | 'network'
+  | 'empty'
+  | 'oversized'
+  | 'invalid-config'
+  | 'malformed';
+
+function createMockAdapter(providerName: string, behavior: Behavior): AIProviderAdapter & { calls: number } {
   let calls = 0;
 
   const adapter: AIProviderAdapter & { calls: number } = {
@@ -98,56 +131,140 @@ const defaultRequest: DraftRequest = {
   requestId: 'req-456',
 };
 
-describe('DraftOrchestrator', () => {
-  // T1: Logicc success — primary returns valid response, fallback never called
-  it('returns success when primary provider succeeds', async () => {
-    const primary = createMockAdapter('logicc', 'success');
-    const fallback = createMockAdapter('langdock', 'success');
-    const orchestrator = new DraftOrchestrator({ primary, fallback });
-
-    const result = await orchestrator.generateDraft(defaultRequest);
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.result.provider).toBe('logicc');
-      expect(result.result.text).toBe('This is a valid draft response.');
-    }
-    expect(fallback.calls).toBe(0);
-  });
-
-  // T2: Logicc transient failure → Langdock success
-  it('falls back to Langdock when Logicc returns HTTP 500', async () => {
-    const primary = createMockAdapter('logicc', 'fail-500');
-    const fallback = createMockAdapter('langdock', 'success');
-    const orchestrator = new DraftOrchestrator({ primary, fallback });
+describe('DraftOrchestrator — single-provider mode (production configuration)', () => {
+  it('returns success when the sole provider succeeds', async () => {
+    const primary = createMockAdapter('langdock', 'success');
+    const orchestrator = new DraftOrchestrator({ primary });
 
     const result = await orchestrator.generateDraft(defaultRequest);
 
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.result.provider).toBe('langdock');
+      expect(result.result.text).toBe('This is a valid draft response.');
     }
-    expect(fallback.calls).toBe(1);
+    expect(primary.calls).toBe(1);
   });
 
-  // T3: Logicc transient failure → Langdock failure
-  it('returns failure when both providers fail with HTTP 500', async () => {
-    const primary = createMockAdapter('logicc', 'fail-500');
-    const fallback = createMockAdapter('langdock', 'fail-500');
-    const orchestrator = new DraftOrchestrator({ primary, fallback });
+  it('returns the error unchanged on a transient failure (HTTP 5xx) — no next provider to hand off to', async () => {
+    const primary = createMockAdapter('langdock', 'fail-500');
+    const orchestrator = new DraftOrchestrator({ primary });
 
     const result = await orchestrator.generateDraft(defaultRequest);
 
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.category).toBe('HTTP_5XX');
+      expect(result.error.provider).toBe('langdock');
+    }
+    expect(primary.calls).toBe(1);
+  });
+
+  it('returns the error unchanged on a timeout', async () => {
+    const primary = createMockAdapter('langdock', 'timeout');
+    const orchestrator = new DraftOrchestrator({ primary });
+
+    const result = await orchestrator.generateDraft(defaultRequest);
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.category).toBe('TIMEOUT');
     }
   });
 
-  // T4: No fallback on 400
-  it('does not fall back on HTTP 400', async () => {
-    const primary = createMockAdapter('logicc', 'fail-400');
-    const fallback = createMockAdapter('langdock', 'success');
+  it('returns the error unchanged on a network failure', async () => {
+    const primary = createMockAdapter('langdock', 'network');
+    const orchestrator = new DraftOrchestrator({ primary });
+
+    const result = await orchestrator.generateDraft(defaultRequest);
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.category).toBe('NETWORK_FAILURE');
+    }
+  });
+
+  it('returns the error unchanged on HTTP 429 (rate limited)', async () => {
+    const primary = createMockAdapter('langdock', 'fail-429');
+    const orchestrator = new DraftOrchestrator({ primary });
+
+    const result = await orchestrator.generateDraft(defaultRequest);
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.category).toBe('HTTP_429');
+    }
+  });
+
+  it('returns the error unchanged on a terminal failure (HTTP 401) — same outcome as a transient one, since there is nowhere to fall back to', async () => {
+    const primary = createMockAdapter('langdock', 'fail-401');
+    const orchestrator = new DraftOrchestrator({ primary });
+
+    const result = await orchestrator.generateDraft(defaultRequest);
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.category).toBe('HTTP_401');
+    }
+  });
+
+  it('returns EMPTY_OUTPUT when the sole provider returns empty text', async () => {
+    const primary = createMockAdapter('langdock', 'empty');
+    const orchestrator = new DraftOrchestrator({ primary });
+
+    const result = await orchestrator.generateDraft(defaultRequest);
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.category).toBe('EMPTY_OUTPUT');
+    }
+  });
+
+  it('returns OUTPUT_TOO_LONG when the sole provider returns oversized text', async () => {
+    const primary = createMockAdapter('langdock', 'oversized');
+    const orchestrator = new DraftOrchestrator({ primary });
+
+    const result = await orchestrator.generateDraft(defaultRequest);
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.category).toBe('OUTPUT_TOO_LONG');
+    }
+  });
+});
+
+describe('DraftOrchestrator — fallback-capable (reintroduction coverage, not used in production)', () => {
+  it('does not call fallback when primary succeeds', async () => {
+    const primary = createMockAdapter('primary-provider', 'success');
+    const fallback = createMockAdapter('fallback-provider', 'success');
+    const orchestrator = new DraftOrchestrator({ primary, fallback });
+
+    const result = await orchestrator.generateDraft(defaultRequest);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.result.provider).toBe('primary-provider');
+    }
+    expect(fallback.calls).toBe(0);
+  });
+
+  it('falls back on a transient primary failure (HTTP 500)', async () => {
+    const primary = createMockAdapter('primary-provider', 'fail-500');
+    const fallback = createMockAdapter('fallback-provider', 'success');
+    const orchestrator = new DraftOrchestrator({ primary, fallback });
+
+    const result = await orchestrator.generateDraft(defaultRequest);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.result.provider).toBe('fallback-provider');
+    }
+    expect(fallback.calls).toBe(1);
+  });
+
+  it('does not fall back on a terminal primary failure (HTTP 400)', async () => {
+    const primary = createMockAdapter('primary-provider', 'fail-400');
+    const fallback = createMockAdapter('fallback-provider', 'success');
     const orchestrator = new DraftOrchestrator({ primary, fallback });
 
     const result = await orchestrator.generateDraft(defaultRequest);
@@ -159,180 +276,72 @@ describe('DraftOrchestrator', () => {
     expect(fallback.calls).toBe(0);
   });
 
-  // T5: No fallback on 401
-  it('does not fall back on HTTP 401', async () => {
-    const primary = createMockAdapter('logicc', 'fail-401');
-    const fallback = createMockAdapter('langdock', 'success');
+  it('returns failure when both primary and fallback fail', async () => {
+    const primary = createMockAdapter('primary-provider', 'fail-500');
+    const fallback = createMockAdapter('fallback-provider', 'fail-500');
     const orchestrator = new DraftOrchestrator({ primary, fallback });
+
+    const result = await orchestrator.generateDraft(defaultRequest);
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.category).toBe('HTTP_5XX');
+      expect(result.error.provider).toBe('fallback-provider');
+    }
+  });
+
+  it('chains through to tertiary when both primary and fallback fail transiently', async () => {
+    const primary = createMockAdapter('primary-provider', 'fail-500');
+    const fallback = createMockAdapter('fallback-provider', 'fail-500');
+    const tertiary = createMockAdapter('tertiary-provider', 'success');
+    const orchestrator = new DraftOrchestrator({ primary, fallback, tertiary });
+
+    const result = await orchestrator.generateDraft(defaultRequest);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.result.provider).toBe('tertiary-provider');
+    }
+    expect(tertiary.calls).toBe(1);
+  });
+
+  it('does not call tertiary when fallback fails terminally', async () => {
+    const primary = createMockAdapter('primary-provider', 'fail-500');
+    const fallback = createMockAdapter('fallback-provider', 'fail-401');
+    const tertiary = createMockAdapter('tertiary-provider', 'success');
+    const orchestrator = new DraftOrchestrator({ primary, fallback, tertiary });
 
     const result = await orchestrator.generateDraft(defaultRequest);
 
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.category).toBe('HTTP_401');
+      expect(result.error.provider).toBe('fallback-provider');
     }
-    expect(fallback.calls).toBe(0);
+    expect(tertiary.calls).toBe(0);
   });
 
-  // T6: No fallback on 403
-  it('does not fall back on HTTP 403', async () => {
-    const primary = createMockAdapter('logicc', 'fail-403');
-    const fallback = createMockAdapter('langdock', 'success');
+  it('works with only two providers configured (no tertiary)', async () => {
+    const primary = createMockAdapter('primary-provider', 'fail-500');
+    const fallback = createMockAdapter('fallback-provider', 'fail-500');
     const orchestrator = new DraftOrchestrator({ primary, fallback });
 
     const result = await orchestrator.generateDraft(defaultRequest);
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.category).toBe('HTTP_403');
-    }
-    expect(fallback.calls).toBe(0);
-  });
-
-  // T7: No fallback on 404
-  it('does not fall back on HTTP 404', async () => {
-    const primary = createMockAdapter('logicc', 'fail-404');
-    const fallback = createMockAdapter('langdock', 'success');
-    const orchestrator = new DraftOrchestrator({ primary, fallback });
-
-    const result = await orchestrator.generateDraft(defaultRequest);
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.category).toBe('HTTP_404');
-    }
-    expect(fallback.calls).toBe(0);
-  });
-
-  // T8: No fallback on 422
-  it('does not fall back on HTTP 422', async () => {
-    const primary = createMockAdapter('logicc', 'fail-422');
-    const fallback = createMockAdapter('langdock', 'success');
-    const orchestrator = new DraftOrchestrator({ primary, fallback });
-
-    const result = await orchestrator.generateDraft(defaultRequest);
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.category).toBe('HTTP_422');
-    }
-    expect(fallback.calls).toBe(0);
-  });
-
-  // T9: No fallback on invalid configuration
-  it('does not fall back on invalid configuration', async () => {
-    const primary = createMockAdapter('logicc', 'invalid-config');
-    const fallback = createMockAdapter('langdock', 'success');
-    const orchestrator = new DraftOrchestrator({ primary, fallback });
-
-    const result = await orchestrator.generateDraft(defaultRequest);
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.category).toBe('INVALID_CONFIGURATION');
-    }
-    expect(fallback.calls).toBe(0);
-  });
-
-  // T10: No fallback on malformed provider response
-  it('does not fall back on malformed provider response', async () => {
-    const primary = createMockAdapter('logicc', 'malformed');
-    const fallback = createMockAdapter('langdock', 'success');
-    const orchestrator = new DraftOrchestrator({ primary, fallback });
-
-    const result = await orchestrator.generateDraft(defaultRequest);
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.category).toBe('MALFORMED_PROVIDER_RESPONSE');
-    }
-    expect(fallback.calls).toBe(0);
-  });
-
-  // T11: 25-second timeout — primary aborts, fallback called
-  it('falls back when primary times out', async () => {
-    const primary = createMockAdapter('logicc', 'timeout');
-    const fallback = createMockAdapter('langdock', 'success');
-    const orchestrator = new DraftOrchestrator({ primary, fallback });
-
-    const result = await orchestrator.generateDraft(defaultRequest);
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.result.provider).toBe('langdock');
-    }
-    expect(fallback.calls).toBe(1);
-  });
-
-  // T12: Empty provider output — no fallback
-  it('returns EMPTY_OUTPUT error when primary returns empty text', async () => {
-    const primary = createMockAdapter('logicc', 'empty');
-    const fallback = createMockAdapter('langdock', 'success');
-    const orchestrator = new DraftOrchestrator({ primary, fallback });
-
-    const result = await orchestrator.generateDraft(defaultRequest);
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.category).toBe('EMPTY_OUTPUT');
-    }
-    expect(fallback.calls).toBe(0);
-  });
-
-  // T13: Oversized provider output — no fallback
-  it('returns OUTPUT_TOO_LONG error when primary returns oversized text', async () => {
-    const primary = createMockAdapter('logicc', 'oversized');
-    const fallback = createMockAdapter('langdock', 'success');
-    const orchestrator = new DraftOrchestrator({ primary, fallback });
-
-    const result = await orchestrator.generateDraft(defaultRequest);
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.category).toBe('OUTPUT_TOO_LONG');
-    }
-    expect(fallback.calls).toBe(0);
-  });
-
-  // T14: Network failure — fallback allowed
-  it('falls back when primary has network failure', async () => {
-    const primary = createMockAdapter('logicc', 'network');
-    const fallback = createMockAdapter('langdock', 'success');
-    const orchestrator = new DraftOrchestrator({ primary, fallback });
-
-    const result = await orchestrator.generateDraft(defaultRequest);
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.result.provider).toBe('langdock');
+      expect(result.error.provider).toBe('fallback-provider');
     }
   });
+});
 
-  // T15: HTTP 408 — fallback allowed
-  it('falls back when primary returns HTTP 408', async () => {
-    const primary = createMockAdapter('logicc', 'fail-408');
-    const fallback = createMockAdapter('langdock', 'success');
-    const orchestrator = new DraftOrchestrator({ primary, fallback });
-
-    const result = await orchestrator.generateDraft(defaultRequest);
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.result.provider).toBe('langdock');
-    }
-  });
-
-  // T16: HTTP 429 — fallback allowed
-  it('falls back when primary returns HTTP 429', async () => {
-    const primary = createMockAdapter('logicc', 'fail-429');
-    const fallback = createMockAdapter('langdock', 'success');
-    const orchestrator = new DraftOrchestrator({ primary, fallback });
-
-    const result = await orchestrator.generateDraft(defaultRequest);
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.result.provider).toBe('langdock');
-    }
+describe('ProviderError — content privacy', () => {
+  it('message is always the category string, never credentials or response body', () => {
+    const error = new ProviderError('langdock', 'HTTP_5XX', 500);
+    expect(error.message).toBe('HTTP_5XX');
+    expect(error.message).not.toContain('key');
+    expect(error.message).not.toContain('token');
+    expect(error.message).not.toContain('password');
+    expect(error.message).not.toContain('secret');
   });
 });

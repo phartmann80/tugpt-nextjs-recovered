@@ -11,9 +11,11 @@
  *
  * Per Stage 8A correction: the worker starts with only infrastructure
  * credentials (Supabase URL + service role key). Provider credentials
- * (Logicc, Langdock, Anymize) are validated lazily, only when the worker reaches
- * the provider-generation path (feature flag enabled). This allows safe
- * startup and polling while ai_draft_generation is disabled.
+ * (Langdock, as of the 2026-08-18 single-provider decision — see ADR-006)
+ * are validated lazily, only when the worker reaches the provider-generation
+ * path (feature flag enabled). This allows safe startup and polling while
+ * ai_draft_generation is disabled, with zero provider env vars required at
+ * boot.
  *
  * Package scripts:
  *   dev:draft  → tsx src/draft-index.ts
@@ -21,8 +23,7 @@
  */
 
 import { createAdminSupabaseClient } from '@tugpt/database';
-import { AnymizeAdapter, LangdockAdapter, LogiccAdapter } from '@tugpt/ai-providers';
-import { DraftOrchestrator } from '@tugpt/ai-orchestration';
+import { buildDraftOrchestrator } from './draft-orchestrator-factory.js';
 import { DraftWorker } from './draft-worker.js';
 
 const POLL_INTERVAL_MS = parseInt(process.env.DRAFT_WORKER_POLL_INTERVAL_MS || '5000', 10);
@@ -43,56 +44,14 @@ async function main(): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const client = createAdminSupabaseClient(supabaseUrl, serviceRoleKey) as any;
 
-  // Provider construction is deferred to a lazy factory.
-  // The factory is called only when the worker reaches the provider-generation
-  // path (ai_draft_generation feature flag enabled). If provider credentials
+  // Provider construction is deferred to a lazy factory. The factory is
+  // called only when the worker reaches the provider-generation path
+  // (ai_draft_generation feature flag enabled). If provider credentials
   // are missing, the factory throws and the worker archives the job through
   // the approved config-error path. Credential values are never logged.
-  const orchestratorFactory = () => {
-    const logiccApiKey = process.env.LOGICC_API_KEY;
-    const logiccEndpointUrl = process.env.LOGICC_ENDPOINT_URL;
-    const langdockApiKey = process.env.LANGDOCK_API_CODE;
-
-    if (!logiccApiKey || !logiccEndpointUrl) {
-      throw new Error('Missing Logicc provider configuration');
-    }
-
-    if (!langdockApiKey) {
-      throw new Error('Missing Langdock fallback configuration');
-    }
-
-    const anymizeApiKey = process.env.ANYMIZE_API_KEY;
-
-    const primaryProvider = new LogiccAdapter({
-      apiKey: logiccApiKey,
-      endpointUrl: logiccEndpointUrl,
-      defaultModel: process.env.LOGICC_DEFAULT_MODEL,
-    });
-
-    const fallbackProvider = new LangdockAdapter({
-      apiKey: langdockApiKey,
-      endpointUrl: process.env.LANGDOCK_ENDPOINT_URL,
-      defaultModel: process.env.MODEL,
-    });
-
-    // Tertiary fallback (Anymize) is optional: if credentials are absent,
-    // the orchestrator simply has no tertiary and returns the secondary error.
-    const tertiaryProvider = anymizeApiKey
-      ? new AnymizeAdapter({
-          apiKey: anymizeApiKey,
-          endpointUrl: process.env.ANYMIZE_ENDPOINT_URL,
-          defaultModel: process.env.ANYMIZE_DEFAULT_MODEL,
-        })
-      : undefined;
-
-    return new DraftOrchestrator({
-      primary: primaryProvider,
-      fallback: fallbackProvider,
-      tertiary: tertiaryProvider,
-    });
-  };
-
-  const worker = new DraftWorker(client, orchestratorFactory, {
+  // See draft-orchestrator-factory.ts for the single-provider (Langdock)
+  // wiring and why Logicc/Anymize are not imported here.
+  const worker = new DraftWorker(client, buildDraftOrchestrator, {
     pollIntervalMs: POLL_INTERVAL_MS,
     visibilityTimeoutSeconds: VISIBILITY_TIMEOUT_SECONDS,
   });
