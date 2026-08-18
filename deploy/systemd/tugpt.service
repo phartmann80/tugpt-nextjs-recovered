@@ -1,0 +1,38 @@
+# deploy/systemd/tugpt.service
+#
+# Supervises the TuGPT Docker Compose stack on the VPS so it starts on
+# boot and restarts if the host reboots unexpectedly. Docker Compose
+# itself (restart: unless-stopped, per service) handles restarting
+# individual containers that crash — this unit only owns the stack as a
+# whole.
+#
+# Install (as root, on the VPS):
+#   cp deploy/systemd/tugpt.service /etc/systemd/system/tugpt.service
+#   systemctl daemon-reload
+#   systemctl enable --now tugpt.service
+#
+# Operate:
+#   systemctl status tugpt        # stack status
+#   systemctl restart tugpt       # recreate containers
+#   journalctl -u tugpt -f        # follow compose output
+#
+# See docs/production_environment.md (section 5) for the full runbook,
+# including the expected working directory layout and /etc/tugpt/*.env
+# files this depends on.
+
+[Unit]
+Description=TuGPT.ai Docker Compose stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/tugpt
+ExecStart=/usr/bin/docker compose -p tugpt -f /opt/tugpt/docker-compose.yml up -d --build --remove-orphans
+ExecStop=/usr/bin/docker compose -p tugpt -f /opt/tugpt/docker-compose.yml down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

@@ -35,7 +35,7 @@ tugpt-nextjs-recovered/
 ├── supabase/
 │   ├── migrations/             # SQL migrations (RLS, triggers, audit tables)
 ├── docs/
-│   ├── adr/                    # Architecture Decision Records (ADR-001 to ADR-012)
+│   ├── adr/                    # Architecture Decision Records (ADR-001 to ADR-013)
 │   ├── status/                 # Phase status reports
 │   ├── production_environment.md
 │   ├── turbo.json
@@ -129,6 +129,14 @@ The release gate (PR #1, merged) established the following pipeline:
 
 All checks must pass. No manual SQL modifications to production schema; all changes go through migrations (`supabase db push`).
 
+## Deployment
+
+TuGPT runs on a self-managed VPS via Docker Compose, not Vercel — see
+[ADR-013](docs/adr/ADR-013-vps-docker-deployment-target.md) for why, and
+[`docs/production_environment.md`](docs/production_environment.md) (section 5)
+for the deployment runbook (`docker-compose.yml`, `deploy/systemd/tugpt.service`,
+`/etc/tugpt/*.env`).
+
 ## Architecture Decision Records
 
 | ADR | Title | Status |
@@ -145,6 +153,7 @@ All checks must pass. No manual SQL modifications to production schema; all chan
 | [ADR-010](docs/adr/ADR-010-feature-flag-architecture.md) | Feature Flag Architecture | Accepted |
 | [ADR-011](docs/adr/ADR-011-secure-inbound-whatsapp-foundation.md) | Secure Inbound WhatsApp Foundation | Accepted |
 | [ADR-012](docs/adr/ADR-012-three-provider-failover-chain.md) | Three-Provider Failover Chain | Accepted |
+| [ADR-013](docs/adr/ADR-013-vps-docker-deployment-target.md) | VPS + Docker Compose Deployment Target (Replacing Vercel) | Accepted |
 
 ## Security
 
@@ -162,6 +171,7 @@ All checks must pass. No manual SQL modifications to production schema; all chan
 - **PR #2** (Logger Secret Sanitization): Merged (squash) into main at commit `72ba4c2f` on Aug 12, 2026. Applies `sanitizeValue()` to `err.message` in the structured logger, preventing Bearer tokens and API keys in error messages from appearing in plaintext logs.
 - **PR #8** (Documentation Update): Merged (squash) into main at commit `e6f2e9e` on Aug 12, 2026. Updated README, ADR-006, ADR-009, and `.env.example` for Phase 3B completion and the three-provider failover chain. Added ADR-012.
 - **PR #10** (ESM/CJS Interop Fix): Merged (squash) into main at commit `4a79f02` on Aug 13, 2026. Removed `"type": "module"` from `apps/worker/package.json` to resolve `ERR_REQUIRE_ESM` crash-loop on staging. Internal packages remain CJS; workers execute via `tsx` which handles ESM syntax in CJS mode. Verified on staging: typecheck, lint, test (100/100), build all pass, both workers start cleanly.
+- **PR #13** (Docker Compose deployment): Adds `apps/web/Dockerfile`, `apps/worker/Dockerfile`, `docker-compose.yml`, and a `docker-build` CI job, targeting the VPS deployment described below instead of Vercel.
 
 ## Contributing
 
