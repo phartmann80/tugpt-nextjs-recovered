@@ -1,0 +1,70 @@
+# docker-compose.yml
+#
+# Production runtime for TuGPT.ai on a shared VPS (see
+# docs/production_environment.md, section 5, for the full deployment
+# runbook). Intended to be run from /opt/tugpt as:
+#
+#   docker compose -p tugpt up -d --build
+#
+# The explicit `-p tugpt` project name namespaces containers/networks so
+# this stack cannot collide with other apps on the same host (e.g. The
+# Infected), even if those apps are later containerized too.
+#
+# Secrets and per-environment config are NOT stored in this repo. Every
+# service loads its environment from a file that lives only on the host,
+# under /etc/tugpt/ (root-owned, 0600) — never committed to git.
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: tugpt-web:latest
+    restart: unless-stopped
+    env_file:
+      - /etc/tugpt/web.env
+    # Bind to loopback only. This host runs a shared reverse proxy
+    # (nginx/Caddy) that terminates TLS for both TuGPT and The Infected by
+    # hostname and forwards to each app's internal port — no container
+    # here should bind 0.0.0.0:80 or 0.0.0.0:443 directly.
+    # 3001 is TuGPT's reserved internal port on this host; confirm it does
+    # not collide with whatever port The Infected's proxy config expects
+    # before first deploy (see docs/production_environment.md section 5.4).
+    ports:
+      - "127.0.0.1:3001:3000"
+    networks:
+      - tugpt
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  whatsapp-worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    image: tugpt-worker:latest
+    restart: unless-stopped
+    command: ["node", "dist/index.js"]
+    env_file:
+      - /etc/tugpt/worker.env
+    networks:
+      - tugpt
+
+  draft-worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    image: tugpt-worker:latest
+    restart: unless-stopped
+    command: ["node", "dist/draft-index.js"]
+    env_file:
+      - /etc/tugpt/worker.env
+    networks:
+      - tugpt
+
+networks:
+  tugpt:
+    driver: bridge

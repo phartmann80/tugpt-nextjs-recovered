@@ -37,3 +37,30 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Build-only validation that apps/web/Dockerfile and
+      # apps/worker/Dockerfile still produce working images (VPS
+      # deployment target, see docs/production_environment.md section 5).
+      # No push/registry step here on purpose — images are built directly
+      # on the VPS from this same Dockerfile during deploy.
+      - name: Build web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          push: false
+          tags: tugpt-web:ci
+
+      - name: Build worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/worker/Dockerfile
+          push: false
+          tags: tugpt-worker:ci
