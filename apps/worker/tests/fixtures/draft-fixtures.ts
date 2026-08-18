@@ -33,8 +33,8 @@ export const MOCK_DRAFT_CONFIG = {
 };
 
 export const MOCK_DRAFT_TEXT = 'Hello! Thank you for reaching out. How can I help you today?';
-export const MOCK_PROVIDER = 'logicc';
-export const MOCK_MODEL = 'logicc-default';
+export const MOCK_PROVIDER = 'langdock';
+export const MOCK_MODEL = 'auto';
 
 export const MOCK_QUEUE_MESSAGE = {
   msgId: MOCK_MSG_ID,
@@ -129,7 +129,7 @@ export function createMockOrchestrator(
           return {
             success: false as const,
             error: {
-              provider: 'logicc',
+              provider: 'langdock',
               category: 'HTTP_5XX',
               httpStatus: 500,
             },
@@ -138,7 +138,7 @@ export function createMockOrchestrator(
           return {
             success: false as const,
             error: {
-              provider: 'logicc',
+              provider: 'langdock',
               category: 'HTTP_401',
               httpStatus: 401,
             },
@@ -147,7 +147,7 @@ export function createMockOrchestrator(
           return {
             success: false as const,
             error: {
-              provider: 'logicc',
+              provider: 'langdock',
               category: 'EMPTY_OUTPUT',
             },
           };
@@ -155,12 +155,12 @@ export function createMockOrchestrator(
           return {
             success: false as const,
             error: {
-              provider: 'logicc',
+              provider: 'langdock',
               category: 'OUTPUT_TOO_LONG',
             },
           };
         default:
-          return { success: false as const, error: { provider: 'logicc', category: 'UNKNOWN_FAILURE' } };
+          return { success: false as const, error: { provider: 'langdock', category: 'UNKNOWN_FAILURE' } };
       }
     }),
   };
