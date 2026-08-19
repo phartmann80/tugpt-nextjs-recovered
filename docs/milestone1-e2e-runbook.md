@@ -1,7 +1,25 @@
 # Milestone #1 — First End-to-End AI Draft (Runbook)
 
 **Target server:** `212.227.44.13`
-**Status:** ready to execute; blocked only on the merged `main` being deployed to the server.
+**Status:** first run 2026-08-19 reached the provider call and failed on a Langdock 400
+(`model: "auto"` does not exist). Fixed; ready to re-run.
+
+## 0. Re-run after the 2026-08-19 fix
+
+The existing seed is still valid — org, connection, draft config, quota and flags were all created
+correctly on the first run, and the `ai_draft_generation` global flag is still `true`. **No teardown
+is needed first.** Re-running `all` re-seeds idempotently and injects a *new* message with a fresh
+`provider_message_id`, so it does not collide with the failed job, which stays in place as evidence.
+
+Two things must be in place before re-running, both new in this fix:
+
+1. **Migration `20260819000001` applied.** Without it the archive allowlist is still too narrow, and
+   `failed_jobs.provider_error_detail` does not exist — the harness's evidence query would fail.
+2. **`LANGDOCK_MODEL` in `/etc/tugpt/worker.env`.** Defaults to `gpt-5-mini` if absent, but set it
+   explicitly so the effective model is visible in the file rather than implied by code.
+
+Full command sequence is in §7. **The run must end with `teardown`**, which sets the global
+`ai_draft_generation` row back to `false`.
 
 ## 1. What this proves
 
@@ -14,7 +32,7 @@ synthetic inbound message
   -> whatsapp_inbound PGMQ queue
   -> tugpt-whatsapp-worker -> process_inbound_message
   -> draft_generation PGMQ queue
-  -> tugpt-draft-worker -> Langdock (auto model routing)
+  -> tugpt-draft-worker -> Langdock (LANGDOCK_MODEL, default gpt-5-mini)
   -> store_draft   (ai_drafts + ai_draft_revisions + quota consume)
   -> human edit + approve, as a real signed-in user
   -> audit trail + quota decrement
@@ -88,10 +106,30 @@ confuse with production data:
 
 ## 6. Prerequisites on the server
 
-- Merged `main` deployed to `/opt/tugpt` (commit `37a957a` or later — the Langdock-only provider).
+- Merged `main` deployed to `/opt/tugpt`.
 - `LANGDOCK_API_CODE` present in `/etc/tugpt/worker.env`.
+- **`LANGDOCK_MODEL` present in `/etc/tugpt/worker.env`** (see §6a — new as of 2026-08-19).
+- Migrations applied through `20260819000001`.
 - `tugpt-whatsapp-worker` and `tugpt-draft-worker` both running, restarted since the deploy.
 - No new credentials needed: the harness reads the same env files the workers already use.
+
+### 6a. `LANGDOCK_MODEL` (new)
+
+The first run failed because the adapter sent `model: "auto"`, which Langdock's OpenAI-compatible
+endpoint does not accept — it returns HTTP 400 with the list of real models. Model selection is now
+an explicit env var, validated at worker boot against a four-model allowlist:
+
+| Value | Notes |
+|---|---|
+| `gpt-5-mini` | **Default.** Cost-conscious; used if the variable is absent. |
+| `gpt-5.1` | Allowed |
+| `gpt-5.2` | Allowed |
+| `gpt-5` | Allowed |
+
+Every other model Langdock offers (`o3`, `o4-mini`, `gpt-5.4*`, `gpt-5.5`, `gpt-5.6-*`,
+`gpt-5.2-pro`, `langdock-llama-3.3-70b-2`) is forbidden on cost grounds and is **rejected at boot**,
+even if the env var names it. `auto` is likewise rejected. Changing model is an env edit plus a
+worker restart — never a code deploy.
 
 ## 7. Commands
 
@@ -102,10 +140,19 @@ cd /opt/tugpt
 git fetch origin && git checkout main && git pull --ff-only origin main
 pnpm install --frozen-lockfile
 
-# --- confirm the Langdock key is present (prints only the variable name) ---
-grep -q '^LANGDOCK_API_CODE=' /etc/tugpt/worker.env \
-  && echo "LANGDOCK_API_CODE: present" \
-  || echo "LANGDOCK_API_CODE: MISSING - add it before continuing"
+# --- apply migrations (20260819000001 is required: it fixes the archive
+#     allowlist and adds failed_jobs.provider_error_detail) ---
+pnpm exec supabase db push
+
+# --- add the new model variable, then confirm both are present
+#     (prints variable names only, never values) ---
+grep -q '^LANGDOCK_MODEL=' /etc/tugpt/worker.env \
+  || echo 'LANGDOCK_MODEL=gpt-5-mini' | sudo tee -a /etc/tugpt/worker.env
+
+for v in LANGDOCK_API_CODE LANGDOCK_MODEL; do
+  grep -q "^$v=" /etc/tugpt/worker.env \
+    && echo "$v: present" || echo "$v: MISSING"
+done
 
 # --- restart the workers on the new code ---
 sudo systemctl restart tugpt-whatsapp-worker tugpt-draft-worker
@@ -149,7 +196,8 @@ service-role key, so they must be driven with a genuine user JWT.
 - every `ai_draft_review_events` row (edit, approve) with actor and version transitions
 - `draft_quota_limits`, `draft_usage_tracking` (`draft_count` / `reserved_count`), and the
   `draft_usage_reservations` row showing the reservation consumed
-- recent `audit_logs` and `failed_jobs`
+- recent `audit_logs` and `failed_jobs`, including `provider_error_detail` — the provider's own
+  error text on any dead-lettered job, sanitized and truncated
 
 It also asserts, and fails the run on: any outbound message existing, `whatsapp_integration` being
 enabled, and a stale-version approve being accepted (which would mean optimistic locking is broken).
@@ -161,9 +209,11 @@ enabled, and a stale-version approve being accepted (which would mean optimistic
 | `90003 CONNECTION_NOT_FOUND` | connection row missing or `status != 'active'` | re-run `seed` |
 | Job `skipped`, `FEATURE_DISABLED` | the flag AND did not resolve true | check the global row is `true` (§3) |
 | Job `skipped`, quota reason | no live quota period, or ceiling hit | re-run `seed` |
-| Job `dead_lettered`, `DRAFT_PROVIDER_CONFIG_ERROR` | `LANGDOCK_API_CODE` missing from the draft worker's env | add it to `/etc/tugpt/worker.env`, restart |
+| Job `dead_lettered`, `DRAFT_INVALID_REQUEST` | the provider rejected the request (4xx) | read `failed_jobs.provider_error_detail` — it quotes the provider verbatim |
+| Job `dead_lettered`, `DRAFT_PROVIDER_CONFIG_ERROR` | `LANGDOCK_API_CODE` missing, or `LANGDOCK_MODEL` off the allowlist | fix `/etc/tugpt/worker.env`, restart |
 | Job `dead_lettered`, `DRAFT_PROVIDER_AUTH_ERROR` | key present but rejected by Langdock | check the key is valid and current |
-| Job `dead_lettered`, `DRAFT_EXHAUSTED_RETRIES` | three transient failures — Langdock down or rate limiting | retry later; single-provider means no fallback (ADR-006) |
+| Job `dead_lettered`, `DRAFT_EXHAUSTED_RETRIES` | three genuinely transient failures — Langdock down or rate limiting | retry later; single-provider means no fallback (ADR-006) |
+| Job `dead_lettered`, `DRAFT_INTERNAL_ERROR` | an archive was rejected and fell back | the log line names the code that was refused — the worker/RPC allowlists have drifted again |
 | Timeout, no `messages` row | whatsapp worker not consuming | `systemctl status tugpt-whatsapp-worker` |
 | Timeout, message but no draft | draft worker not consuming | `systemctl status tugpt-draft-worker` |
 | `P3B02 FORBIDDEN` on review | reviewer not a member, or no user JWT | pass `--env-file /etc/tugpt/web.env` |
