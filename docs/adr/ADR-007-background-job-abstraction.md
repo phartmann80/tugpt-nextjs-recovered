@@ -3,6 +3,8 @@
 ## Status
 Accepted
 
+**Amended by [ADR-014](./ADR-014-pgmq-production-queue-backend.md) (2026-08-18):** the "production adapter" choice below was left open between BullMQ/Redis and Supabase PgBoss. ADR-014 documents that neither was used — **PGMQ** is the production backend actually running, for both the `whatsapp_inbound` and `draft_generation` queues. See ADR-014 for the concrete backend, retry/archive policy details, and a note on `InMemoryJobQueue`'s current (unwired) state. This ADR's interface design below is otherwise unchanged and still followed.
+
 ## Context
 Asynchronous processing is required for WhatsApp messaging, appointment notifications, quote generation, and background AI tasks.
 
