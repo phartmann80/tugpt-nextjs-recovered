@@ -6,6 +6,7 @@
     "build": "tsc",
     "dev": "tsx src/index.ts",
     "dev:draft": "tsx src/draft-index.ts",
+    "e2e:milestone1": "tsx src/e2e/milestone1.ts",
     "start": "node dist/index.js",
     "start:draft": "node dist/draft-index.js",
     "test": "vitest run",
