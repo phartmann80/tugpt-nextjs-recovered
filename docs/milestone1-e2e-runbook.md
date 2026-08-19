@@ -20,8 +20,9 @@ Two things must be in place before re-running, both new in this fix:
    the database (§6b). The apply procedure for the server is
    [docs/server-migrations.md](server-migrations.md) — `supabase db push` alone fails on the VPS
    with `Cannot find project ref`.
-2. **`LANGDOCK_MODEL` in `/etc/tugpt/worker.env`.** Defaults to `gpt-5-mini` if absent, but set it
-   explicitly so the effective model is visible in the file rather than implied by code.
+2. **`LANGDOCK_MODELS` in `/etc/tugpt/worker.env`.** Defaults to the full allowlist if absent, but
+   set it explicitly so the effective rotation order is visible in the file rather than implied by
+   code (§6a).
 
 Full command sequence is in §7. **The run must end with `teardown`**, which sets the global
 `ai_draft_generation` row back to `false`.
@@ -116,29 +117,54 @@ confuse with production data:
 
 - Merged `main` deployed to `/opt/tugpt`.
 - `LANGDOCK_API_CODE` present in `/etc/tugpt/worker.env`.
-- **`LANGDOCK_MODEL` present in `/etc/tugpt/worker.env`** (see §6a — new as of 2026-08-19).
+- **`LANGDOCK_MODELS` (or `LANGDOCK_MODEL`) present in `/etc/tugpt/worker.env`** — see §6a.
 - Migrations applied through `20260819000002` — see [docs/server-migrations.md](server-migrations.md).
 - `/etc/tugpt/migrate.env` present (root-owned, `0600`) if you need to apply migrations.
 - `tugpt-whatsapp-worker` and `tugpt-draft-worker` both running, restarted since the deploy.
 - No new credentials needed: the harness reads the same env files the workers already use.
 
-### 6a. `LANGDOCK_MODEL` (new)
+### 6a. Model selection and rotation
 
 The first run failed because the adapter sent `model: "auto"`, which Langdock's OpenAI-compatible
 endpoint does not accept — it returns HTTP 400 with the list of real models. Model selection is now
-an explicit env var, validated at worker boot against a four-model allowlist:
+explicit and validated at worker boot against a four-model allowlist:
 
-| Value | Notes |
+| Model | Notes |
 |---|---|
-| `gpt-5-mini` | **Default.** Cost-conscious; used if the variable is absent. |
+| `gpt-5-mini` | Cheapest; head of the default rotation order |
 | `gpt-5.1` | Allowed |
 | `gpt-5.2` | Allowed |
 | `gpt-5` | Allowed |
 
 Every other model Langdock offers (`o3`, `o4-mini`, `gpt-5.4*`, `gpt-5.5`, `gpt-5.6-*`,
 `gpt-5.2-pro`, `langdock-llama-3.3-70b-2`) is forbidden on cost grounds and is **rejected at boot**,
-even if the env var names it. `auto` is likewise rejected. Changing model is an env edit plus a
+even if the env var names it. `auto` is likewise rejected. Changing models is an env edit plus a
 worker restart — never a code deploy.
+
+**Rotation (new).** Each approved model has its own Langdock quota (500 requests / 250k tokens), so
+they are four independent capacity buckets. On a per-model quota rejection the worker tries the next
+model in the configured order within the same attempt:
+
+| Variable | Effect |
+|---|---|
+| `LANGDOCK_MODELS=gpt-5-mini,gpt-5.1,gpt-5.2,gpt-5` | **Recommended.** Rotation in that order. |
+| `LANGDOCK_MODEL=gpt-5-mini` | Pins one model, rotation off. What the server has today. |
+| neither | Defaults to the full allowlist, cheapest first. |
+
+`LANGDOCK_MODELS` wins if both are set, and the worker logs that `LANGDOCK_MODEL` was ignored.
+Rotation is narrow on purpose: only a 429, or a 400 in which the provider says the model is unknown.
+Auth failures, malformed requests, timeouts and 5xx do **not** rotate — see ADR-006.
+
+To switch the server from a pinned model to rotation:
+
+```bash
+sudo sed -i 's/^LANGDOCK_MODEL=.*/LANGDOCK_MODELS=gpt-5-mini,gpt-5.1,gpt-5.2,gpt-5/' \
+  /etc/tugpt/worker.env
+sudo systemctl restart tugpt-draft-worker
+journalctl -u tugpt-draft-worker -n 20 --no-pager | grep 'model order resolved'
+```
+
+The log line reports the resolved order and whether rotation is enabled.
 
 ### 6b. Schema gate (new)
 
@@ -178,12 +204,12 @@ set -a; . /etc/tugpt/migrate.env; set +a
 pnpm exec supabase db push --db-url "$SUPABASE_DB_URL" --dry-run
 pnpm exec supabase db push --db-url "$SUPABASE_DB_URL"
 
-# --- add the new model variable, then confirm both are present
+# --- set the model rotation order, then confirm the variables are present
 #     (prints variable names only, never values) ---
-grep -q '^LANGDOCK_MODEL=' /etc/tugpt/worker.env \
-  || echo 'LANGDOCK_MODEL=gpt-5-mini' | sudo tee -a /etc/tugpt/worker.env
+grep -q '^LANGDOCK_MODELS=' /etc/tugpt/worker.env \
+  || echo 'LANGDOCK_MODELS=gpt-5-mini,gpt-5.1,gpt-5.2,gpt-5' | sudo tee -a /etc/tugpt/worker.env
 
-for v in LANGDOCK_API_CODE LANGDOCK_MODEL; do
+for v in LANGDOCK_API_CODE LANGDOCK_MODELS; do
   grep -q "^$v=" /etc/tugpt/worker.env \
     && echo "$v: present" || echo "$v: MISSING"
 done
@@ -244,7 +270,8 @@ enabled, and a stale-version approve being accepted (which would mean optimistic
 | Job `skipped`, `FEATURE_DISABLED` | the flag AND did not resolve true | check the global row is `true` (§3) |
 | Job `skipped`, quota reason | no live quota period, or ceiling hit | re-run `seed` |
 | Job `dead_lettered`, `DRAFT_INVALID_REQUEST` | the provider rejected the request (4xx) | read `failed_jobs.provider_error_detail` — it quotes the provider verbatim |
-| Job `dead_lettered`, `DRAFT_PROVIDER_CONFIG_ERROR` | `LANGDOCK_API_CODE` missing, or `LANGDOCK_MODEL` off the allowlist | fix `/etc/tugpt/worker.env`, restart |
+| Job `dead_lettered`, `DRAFT_PROVIDER_CONFIG_ERROR` | `LANGDOCK_API_CODE` missing, or a model off the allowlist / duplicated in `LANGDOCK_MODELS` | fix `/etc/tugpt/worker.env`, restart |
+| Job `dead_lettered`, `DRAFT_EXHAUSTED_RETRIES`, detail says `model(s) exhausted` | every model's quota is spent | wait for the quota window, or widen `LANGDOCK_MODELS` |
 | Job `dead_lettered`, `DRAFT_PROVIDER_AUTH_ERROR` | key present but rejected by Langdock | check the key is valid and current |
 | Job `dead_lettered`, `DRAFT_EXHAUSTED_RETRIES` | three genuinely transient failures — Langdock down or rate limiting | retry later; single-provider means no fallback (ADR-006) |
 | Job `dead_lettered`, `DRAFT_INTERNAL_ERROR` | an archive was rejected and fell back | the log line names the code that was refused — the worker/RPC allowlists have drifted again |

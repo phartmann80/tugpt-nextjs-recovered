@@ -26,7 +26,7 @@ POST https://api.langdock.com/openai/eu/v1/chat/completions   {"model":"auto", .
 HTTP 400
 {"error":{"message":"Invalid model, available models are: gpt-5-mini, gpt-5, o3,
  gpt-5.1, o4-mini, gpt-5.6-sol, gpt-5.6-terra, gpt-5.4-mini, gpt-5.4, gpt-5.6-luna,
- gpt-5.5, gpt-5.2-pro, langdock-llama-3.3-70b-2, gpt-5.2","type":"invalid_request_error"}
+ gpt-5.5, gpt-5.2-pro, langdock-llama-3.3-70b-2, gpt-5.2","type":"invalid_request_error"}}
 ```
 
 The API key and endpoint were valid. Langdock's OpenAI-compatible surface requires a concrete model identifier; there is no `auto` pseudo-model. **Do not reintroduce `"auto"`.** It is not a mistake to be corrected — the value does not exist on this API surface, and using it fails every request with a terminal 400.
@@ -38,11 +38,36 @@ The API key and endpoint were valid. Langdock's OpenAI-compatible surface requir
 - **The allowlist is enforced, not advisory.** `LANGDOCK_ALLOWED_MODELS` in `packages/ai-providers/src/langdock.ts` is checked in two places: `resolveLangdockModel()` at boot of the provider path, and `LangdockAdapter` itself (constructor *and* per-call override). A forbidden model raises `INVALID_CONFIGURATION` — a terminal category — so it archives immediately with the reason recorded rather than burning retries or money, and it cannot reach the network even if the env var says otherwise.
 - **Each approved model has its own Langdock quota** (500 requests / 250k tokens), giving four independent capacity buckets. The allowlist order in code is cheapest-first because it is the intended rotation order for the follow-up below.
 
-### Open follow-up: model-level rotation
+### 2026-08-19 decision: model-level rotation (implemented)
 
-The four separate per-model quotas make model-level rotation the natural single-provider replacement for the provider-level failover chain removed on 2026-08-18: on a 429/quota-exhausted response, try the next allowed model before falling into the normal retry/dead-letter path — same transient/terminal rules, applied at model level instead of provider level.
+The four separate per-model quotas make model-level rotation the natural single-provider replacement for the provider-level failover chain removed on 2026-08-18. Implemented in `packages/ai-providers/src/langdock-rotation.ts` as `RotatingLangdockAdapter`, which implements the same `AIProviderAdapter` contract — so `DraftOrchestrator`, `fallback-matrix.ts`, `draft-worker.ts` and the retry/archive policy are unchanged. From the outside it is one provider call.
 
-Deliberately not implemented in the 2026-08-19 change: milestone #1 was blocked on the defect fix, and rotation adds a real test surface (ordering configuration, abort-budget interaction, per-model attribution) that should not be rushed onto the critical path. When implemented, the order must be configurable and the model that actually served each draft must be recorded — `ai_drafts.model` already captures this, since the adapter returns the model it used and `store_draft` persists it, so cost and quality can be attributed per model.
+**Configuration.**
+
+| Variable | Meaning |
+|---|---|
+| `LANGDOCK_MODELS` | Ordered, comma-separated rotation list, cheapest first. Every entry validated against the allowlist. Duplicates rejected — a duplicate is a typo that would silently halve the rotation depth. |
+| `LANGDOCK_MODEL` | Pins exactly one model and disables rotation. The escape hatch, and back-compatible for deployments that set it before rotation existed. |
+| neither set | Defaults to the whole allowlist in order: `gpt-5-mini,gpt-5.1,gpt-5.2,gpt-5`. |
+
+`LANGDOCK_MODELS` wins when both are set, and the fact that `LANGDOCK_MODEL` was ignored is logged. Failing the boot instead was considered and rejected: it would fire on exactly the correct upgrade action (adding `LANGDOCK_MODELS` to a host that already has `LANGDOCK_MODEL`), which is the wrong moment to be strict. Ambiguity is reported, not swallowed.
+
+**What rotates.** Deliberately narrow — only failures attributable to *that model*:
+
+- **HTTP 429** — the per-model quota or rate limit. The reason rotation exists.
+- **HTTP 400 whose provider detail complains about the model** (`Invalid model, available models are: ...`) — what Langdock returns for a model retired from its catalogue. Rotating past it keeps drafts flowing while the allowlist is corrected. This is only reachable because `providerDetail` capture landed first.
+
+**What does not rotate**, and why the list is short:
+
+- **401 / 403** are account-level. Every model would fail identically, so rotating turns one auth failure into four.
+- **A 400 that is not about the model** means *our request* is malformed. Rotating spends every model's quota to receive the same rejection.
+- **Timeouts, network failures, 5xx** are transport- or gateway-level. The worker's PGMQ retry schedule already handles those correctly; rotating does not help and costs quota.
+
+Whatever error finally escapes keeps its original category, so the transient/terminal classification in item 4 below is untouched. All four models rate-limited is still `HTTP_429` — still transient, still worth retrying later, because the quotas reset. When every model is exhausted the detail records that (`all 4 model(s) exhausted (gpt-5-mini -> gpt-5.1 -> ...)`), so a total exhaustion is distinguishable in `failed_jobs` from one model being briefly limited.
+
+**Latency budget.** Rotation shares the caller's `AbortSignal`, so the orchestrator's 25-second budget covers all attempts together rather than each one. Worst-case single-attempt latency stays 25s (consequence 3 below) instead of becoming 4×25s. A 429 returns immediately, so in the case rotation is actually for, the added time is negligible.
+
+**Per-model attribution.** The adapter returns the model that actually served the request, `store_draft` persists it to `ai_drafts.model`, and — since `20260819000003` — to `draft_generation_jobs.model` as well. `metricsCollector.recordProviderCall` is invoked per attempt with its own model, so an abandoned attempt is recorded too. Cost and quality are attributable per model without joining back through the draft.
 
 ## Decision
 1. **Adapter Pattern (unchanged)**: Each provider implements the common `AIProviderAdapter` interface (`generateCompletion()`, see `packages/ai-providers/src/adapter.ts`). Adapters live in `packages/ai-providers/`.
@@ -56,13 +81,13 @@ Deliberately not implemented in the 2026-08-19 change: milestone #1 was blocked 
    - **Provider errors are now captured.** `ProviderError.providerDetail` carries a short, sanitized description of the provider's own complaint, persisted to `failed_jobs.provider_error_detail` and included in the "Provider failure" log line. Only the provider's structured error fields (`error.message` / `error.type` / `error.code`) are extracted — never the raw response body — then credential-shaped substrings are redacted and the result is capped at 300 characters, so it cannot become a path for prompts or customer content to reach storage. This is the difference between diagnosing an invalid-model rejection from the logs and having to reproduce it by hand against the live API.
 5. **25-Second Abort**: Each provider call is wrapped in an `AbortController` with a 25-second timeout (`packages/ai-orchestration/src/orchestrator.ts`). In the single-provider configuration, one draft generation attempt has a worst case of 25 seconds, not the 75-second (3×25s) worst case the old three-provider chain had.
 6. **Content Privacy (unchanged)**: Adapters return only generated content and sanitized metadata. No raw provider response bodies, headers, or API keys are logged. The `Logger` (ADR-009) sanitizes context values and `err.message`.
-7. **Configuration**: Langdock is configured via `LANGDOCK_API_CODE` (required), `LANGDOCK_ENDPOINT_URL` (optional, defaults to `https://api.langdock.com/openai/eu/v1`), and `LANGDOCK_MODEL` (optional, defaults to `gpt-5-mini`, validated against the allowlist at boot). No `LOGICC_*` or `ANYMIZE_*` environment variables are required at worker boot, or at any point — see `apps/worker/src/draft-orchestrator-factory.ts`, which does not import `LogiccAdapter` or `AnymizeAdapter` at all. Provider configuration is still validated lazily, only when the worker reaches the provider-generation path (`ai_draft_generation` feature flag enabled for the organization), so the worker starts and polls safely with zero provider credentials while the flag is off.
+7. **Configuration**: Langdock is configured via `LANGDOCK_API_CODE` (required), `LANGDOCK_ENDPOINT_URL` (optional, defaults to `https://api.langdock.com/openai/eu/v1`), and the model selection above — `LANGDOCK_MODELS` (optional ordered rotation list) or `LANGDOCK_MODEL` (optional, pins one model), both validated against the allowlist at boot, defaulting to the full allowlist in cheapest-first order. No `LOGICC_*` or `ANYMIZE_*` environment variables are required at worker boot, or at any point — see `apps/worker/src/draft-orchestrator-factory.ts`, which does not import `LogiccAdapter` or `AnymizeAdapter` at all. Provider configuration is still validated lazily, only when the worker reaches the provider-generation path (`ai_draft_generation` feature flag enabled for the organization), so the worker starts and polls safely with zero provider credentials while the flag is off.
 
 ## Providers
 
 | Order | Provider | Adapter | Env Prefix | Role | Status |
 |-------|----------|---------|------------|------|--------|
-| 1 | Langdock | `LangdockAdapter` | `LANGDOCK_*` | Sole draft generation provider | Active |
+| 1 | Langdock | `RotatingLangdockAdapter` over `LangdockAdapter` | `LANGDOCK_*` | Sole draft generation provider, rotating over the four approved models | Active |
 | — | Logicc | `LogiccAdapter` | `LOGICC_*` | — | Removed (cost). Adapter code retained, unused. |
 | — | Anymize | `AnymizeAdapter` | `ANYMIZE_*` | — | Removed (cross-project isolation). Adapter code retained, unused. |
 
