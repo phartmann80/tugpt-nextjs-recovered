@@ -34,9 +34,20 @@ export const APPROVED_ARCHIVE_ERROR_CODES: readonly DraftErrorCode[] = [
   'DRAFT_PROVIDER_EMPTY_OUTPUT',
   'DRAFT_PROVIDER_OUTPUT_TOO_LONG',
   'DRAFT_INVALID_CONFIG',
+  'DRAFT_INTERNAL_ERROR',
 ] as const;
 
-/** Normalized error codes for the draft worker. */
+/**
+ * Normalized error codes for the draft worker.
+ *
+ * This list must stay a subset of the allowlist inside
+ * `private.archive_draft_failed_job`. It was not, until 2026-08-19: the RPC
+ * accepted only five codes while the worker produced eight, so every terminal
+ * archive was rejected with P3B15 and the job fell through to the read-side
+ * retry-exhaustion path. Migration 20260819000001 aligned them. If you add a
+ * code here, add it to that RPC's allowlist and to the failed_jobs CHECK
+ * constraint in the same change.
+ */
 export type DraftErrorCode =
   | 'DRAFT_PROVIDER_AUTH_ERROR'
   | 'DRAFT_PROVIDER_CONFIG_ERROR'
@@ -45,7 +56,8 @@ export type DraftErrorCode =
   | 'DRAFT_INVALID_REQUEST'
   | 'DRAFT_PROVIDER_EMPTY_OUTPUT'
   | 'DRAFT_PROVIDER_OUTPUT_TOO_LONG'
-  | 'DRAFT_INVALID_CONFIG';
+  | 'DRAFT_INVALID_CONFIG'
+  | 'DRAFT_INTERNAL_ERROR';
 
 /**
  * Categories classified as transient (fallback-eligible).
