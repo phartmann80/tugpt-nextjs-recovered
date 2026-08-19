@@ -1,24 +1,65 @@
 import { metricsCollector } from '@tugpt/observability';
 import type { AIProviderAdapter, ChatMessage, CompletionOptions, CompletionResponse } from './adapter';
-import { ProviderError } from './errors';
+import { ProviderError, extractProviderDetail } from './errors';
 
 /**
- * Langdock's auto model-routing identifier. As of the 2026-08-18
- * single-provider decision (see ADR-006), TuGPT does not pin individual
- * models — Langdock's `auto` mode selects the model per-request. This is
- * the single, centralized source of that default: do not hardcode a model
- * literal anywhere else. Callers that omit both `LangdockConfig.defaultModel`
- * and `CompletionOptions.model` get this value.
+ * Models TuGPT is permitted to send to Langdock.
+ *
+ * Langdock's OpenAI-compatible endpoint exposes considerably more models than
+ * these. The rest are excluded on cost grounds by owner decision (2026-08-19):
+ * TuGPT replaced a provider that was cut for being too expensive, so the
+ * allowlist is a hard cost control, not a suggestion. Anything outside this
+ * list is refused before a request is made — see `assertAllowedLangdockModel`.
+ *
+ * Order is meaningful: it is the intended rotation order for the follow-up
+ * model-level rotation work (cheapest first).
  */
-export const LANGDOCK_AUTO_MODEL = 'auto';
+export const LANGDOCK_ALLOWED_MODELS = ['gpt-5-mini', 'gpt-5.1', 'gpt-5.2', 'gpt-5'] as const;
+
+export type LangdockModel = (typeof LANGDOCK_ALLOWED_MODELS)[number];
+
+/**
+ * Default model when `LANGDOCK_MODEL` is unset.
+ *
+ * Replaces the former `LANGDOCK_AUTO_MODEL = 'auto'`. Langdock's
+ * OpenAI-compatible endpoint does NOT support an `auto` pseudo-model: sending
+ * it returns HTTP 400 `invalid_request_error` with the list of real models.
+ * Verified against the live API on 2026-08-19. Do not reintroduce 'auto' —
+ * see ADR-006.
+ */
+export const LANGDOCK_DEFAULT_MODEL: LangdockModel = 'gpt-5-mini';
+
+/** Type guard for the allowlist. */
+export function isAllowedLangdockModel(model: string): model is LangdockModel {
+  return (LANGDOCK_ALLOWED_MODELS as readonly string[]).includes(model);
+}
+
+/**
+ * Throw a terminal configuration error unless `model` is on the allowlist.
+ *
+ * INVALID_CONFIGURATION is a terminal category, so a bad model never burns
+ * retries: the job archives immediately with the reason recorded.
+ *
+ * @throws ProviderError INVALID_CONFIGURATION
+ */
+export function assertAllowedLangdockModel(model: string, provider = 'langdock'): asserts model is LangdockModel {
+  if (!isAllowedLangdockModel(model)) {
+    throw new ProviderError(
+      provider,
+      'INVALID_CONFIGURATION',
+      undefined,
+      `Model '${model}' is not on the TuGPT Langdock allowlist. Allowed: ${LANGDOCK_ALLOWED_MODELS.join(', ')}.`
+    );
+  }
+}
 
 export interface LangdockConfig {
   apiKey: string;
   endpointUrl?: string;
   /**
-   * Overrides the model sent to Langdock. Defaults to LANGDOCK_AUTO_MODEL
-   * ('auto'). Only set this for a deliberate, reviewed exception — the
-   * standing policy is auto routing, not a pinned model.
+   * Model to send. Defaults to LANGDOCK_DEFAULT_MODEL ('gpt-5-mini').
+   * Must be on LANGDOCK_ALLOWED_MODELS; anything else is rejected in the
+   * constructor rather than at request time.
    */
   defaultModel?: string;
 }
@@ -27,12 +68,20 @@ export class LangdockAdapter implements AIProviderAdapter {
   readonly providerName = 'langdock';
   private apiKey: string;
   private endpointUrl: string;
-  private defaultModel: string;
+  private defaultModel: LangdockModel;
 
+  /**
+   * @throws ProviderError INVALID_CONFIGURATION if `defaultModel` is set to a
+   * model outside the allowlist. Failing here means a misconfigured deployment
+   * is caught at construction, before any request is billed.
+   */
   constructor(config: LangdockConfig) {
     this.apiKey = config.apiKey;
     this.endpointUrl = config.endpointUrl || 'https://api.langdock.com/openai/eu/v1';
-    this.defaultModel = config.defaultModel || LANGDOCK_AUTO_MODEL;
+
+    const model = config.defaultModel || LANGDOCK_DEFAULT_MODEL;
+    assertAllowedLangdockModel(model, 'langdock');
+    this.defaultModel = model;
   }
 
   async generateCompletion(
@@ -42,6 +91,10 @@ export class LangdockAdapter implements AIProviderAdapter {
     const startTime = Date.now();
     const model = options.model || this.defaultModel;
     const signal = options.signal;
+
+    // Re-check per call: a caller-supplied override must not be able to route
+    // around the cost allowlist. Throws INVALID_CONFIGURATION (terminal).
+    assertAllowedLangdockModel(model, this.providerName);
 
     const requestBody = {
       model,
@@ -64,6 +117,17 @@ export class LangdockAdapter implements AIProviderAdapter {
       const latencyMs = Date.now() - startTime;
 
       if (!response.ok) {
+        // Capture what the provider actually objected to. Only its structured
+        // error fields are extracted, then sanitized and truncated — never the
+        // raw body. Reading the body must not mask the HTTP error itself, so
+        // any failure here degrades to no detail rather than throwing.
+        let detail: string | undefined;
+        try {
+          detail = extractProviderDetail(await response.text());
+        } catch {
+          detail = undefined;
+        }
+
         metricsCollector.recordProviderCall({
           provider: this.providerName,
           model,
@@ -74,7 +138,7 @@ export class LangdockAdapter implements AIProviderAdapter {
           success: false,
           errorCode: `HTTP_${response.status}`,
         });
-        throw ProviderError.fromHttpStatus(this.providerName, response.status);
+        throw ProviderError.fromHttpStatus(this.providerName, response.status, detail);
       }
 
       const data = (await response.json()) as {
