@@ -1,8 +1,11 @@
 # Milestone #1 — First End-to-End AI Draft (Runbook)
 
 **Target server:** `212.227.44.13`
-**Status:** first run 2026-08-19 reached the provider call and failed on a Langdock 400
-(`model: "auto"` does not exist). Fixed; ready to re-run.
+**Status:** milestone #1 accepted 2026-08-19 — draft generated via `langdock/gpt-5-mini`, edited and
+approved by a real reviewer, quota and audit trail correct, zero outbound. That run, however,
+executed against a database missing migration `20260819000001` (the push had failed and nobody was
+forced to notice), so the preflight now blocks on a stale schema — see §6b and
+[docs/server-migrations.md](server-migrations.md).
 
 ## 0. Re-run after the 2026-08-19 fix
 
@@ -13,8 +16,10 @@ is needed first.** Re-running `all` re-seeds idempotently and injects a *new* me
 
 Two things must be in place before re-running, both new in this fix:
 
-1. **Migration `20260819000001` applied.** Without it the archive allowlist is still too narrow, and
-   `failed_jobs.provider_error_detail` does not exist — the harness's evidence query would fail.
+1. **All migrations applied.** Preflight now verifies this and aborts if the checkout is ahead of
+   the database (§6b). The apply procedure for the server is
+   [docs/server-migrations.md](server-migrations.md) — `supabase db push` alone fails on the VPS
+   with `Cannot find project ref`.
 2. **`LANGDOCK_MODEL` in `/etc/tugpt/worker.env`.** Defaults to `gpt-5-mini` if absent, but set it
    explicitly so the effective model is visible in the file rather than implied by code.
 
@@ -103,13 +108,17 @@ confuse with production data:
 4. **Verifies its own privilege level** during the review step: the "user" client must *fail* to
    read `draft_generation_jobs` (service-role only). Without that check, a misconfigured client
    could pass the review test while silently running as service-role.
+5. **Refuses to run against a stale schema.** Every migration in the checkout must be present in the
+   database, and the objects the worker depends on are probed directly (§6b). Added after the
+   2026-08-19 run passed against a database missing `20260819000001`.
 
 ## 6. Prerequisites on the server
 
 - Merged `main` deployed to `/opt/tugpt`.
 - `LANGDOCK_API_CODE` present in `/etc/tugpt/worker.env`.
 - **`LANGDOCK_MODEL` present in `/etc/tugpt/worker.env`** (see §6a — new as of 2026-08-19).
-- Migrations applied through `20260819000001`.
+- Migrations applied through `20260819000002` — see [docs/server-migrations.md](server-migrations.md).
+- `/etc/tugpt/migrate.env` present (root-owned, `0600`) if you need to apply migrations.
 - `tugpt-whatsapp-worker` and `tugpt-draft-worker` both running, restarted since the deploy.
 - No new credentials needed: the harness reads the same env files the workers already use.
 
@@ -131,6 +140,28 @@ Every other model Langdock offers (`o3`, `o4-mini`, `gpt-5.4*`, `gpt-5.5`, `gpt-
 even if the env var names it. `auto` is likewise rejected. Changing model is an env edit plus a
 worker restart — never a code deploy.
 
+### 6b. Schema gate (new)
+
+Preflight verifies the database matches the checkout and **aborts the run** if it does not. This
+replaces the warning that let the 2026-08-19 run report success against a database missing
+`20260819000001`.
+
+Two layers, both fatal:
+
+1. **Ledger diff** — every `.sql` in `supabase/migrations` must have a row in
+   `supabase_migrations.schema_migrations`. Generic: new migration files are covered with no code
+   change. The ledger is read through `applied_migration_versions()`, a `SECURITY DEFINER` function
+   granted to `service_role` only (added in `20260819000002`); it returns version and name, never
+   the migration SQL.
+2. **Effect probes** — the objects the worker actually depends on are queried directly, because a
+   ledger row proves a migration was *recorded*, not that it *took effect*.
+
+Both are read-only. The `archive_draft_failed_job` probe calls the RPC with a random job id, which
+is rejected with `P3B07` before anything is written.
+
+On failure the harness prints the missing migrations, what each one's absence breaks, and the exact
+apply command. Fix with [docs/server-migrations.md](server-migrations.md), then re-run `preflight`.
+
 ## 7. Commands
 
 ```bash
@@ -140,9 +171,12 @@ cd /opt/tugpt
 git fetch origin && git checkout main && git pull --ff-only origin main
 pnpm install --frozen-lockfile
 
-# --- apply migrations (20260819000001 is required: it fixes the archive
-#     allowlist and adds failed_jobs.provider_error_detail) ---
-pnpm exec supabase db push
+# --- apply migrations. `db push` with no target fails on this box with
+#     "Cannot find project ref"; --db-url avoids linking entirely.
+#     Full procedure and how to build the URL: docs/server-migrations.md ---
+set -a; . /etc/tugpt/migrate.env; set +a
+pnpm exec supabase db push --db-url "$SUPABASE_DB_URL" --dry-run
+pnpm exec supabase db push --db-url "$SUPABASE_DB_URL"
 
 # --- add the new model variable, then confirm both are present
 #     (prints variable names only, never values) ---
@@ -217,6 +251,8 @@ enabled, and a stale-version approve being accepted (which would mean optimistic
 | Timeout, no `messages` row | whatsapp worker not consuming | `systemctl status tugpt-whatsapp-worker` |
 | Timeout, message but no draft | draft worker not consuming | `systemctl status tugpt-draft-worker` |
 | `P3B02 FORBIDDEN` on review | reviewer not a member, or no user JWT | pass `--env-file /etc/tugpt/web.env` |
+| `REFUSING TO RUN: the database is not running the schema this checkout expects` | migrations in the checkout are not applied | [docs/server-migrations.md](server-migrations.md) §1 |
+| `migration ledger unreadable` | `applied_migration_versions()` not installed, i.e. `20260819000002` not applied | same — apply migrations |
 
 ## 10. After the run
 

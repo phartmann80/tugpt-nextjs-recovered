@@ -8,7 +8,7 @@
  *     -> whatsapp_inbound PGMQ queue
  *     -> whatsapp worker -> process_inbound_message
  *     -> draft_generation PGMQ queue
- *     -> draft worker -> Langdock (auto model routing)
+ *     -> draft worker -> Langdock (LANGDOCK_MODEL, default gpt-5-mini)
  *     -> store_draft (ai_drafts + ai_draft_revisions + quota consume)
  *     -> human edit + approve as a real signed-in user
  *     -> audit trail + quota decrement
@@ -46,6 +46,13 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import { loadHarnessEnv, fingerprint, type HarnessEnv } from './env.js';
 import { parseArgs } from './args.js';
+import {
+  SCHEMA_EXPECTATIONS,
+  MIGRATION_REMEDIATION,
+  readRepoMigrationVersions,
+  fetchAppliedMigrationVersions,
+  missingVersions,
+} from './schema-expectations.js';
 import {
   ORG_SLUG,
   ORG_NAME,
@@ -149,6 +156,85 @@ async function requireOrg(ctx: Ctx): Promise<string> {
 }
 
 /**
+ * Abort unless the database is running the schema this checkout expects.
+ *
+ * This is the check whose absence let the 2026-08-19 run report success
+ * against a database missing 20260819000001. Two layers, both fatal:
+ *
+ *   1. Ledger diff — every migration file in supabase/migrations must have a
+ *      row in supabase_migrations.schema_migrations. Generic: new migrations
+ *      are covered automatically.
+ *   2. Effect probes — the specific objects the worker depends on are queried
+ *      directly, because a ledger row proves a migration was recorded, not
+ *      that it took effect.
+ *
+ * Every failure is collected before reporting, so one run tells the operator
+ * everything that is wrong rather than one thing at a time.
+ */
+async function assertSchemaUpToDate(ctx: Ctx): Promise<void> {
+  const problems: string[] = [];
+
+  // --- layer 1: ledger diff ---
+  const repoVersions = readRepoMigrationVersions();
+  if (repoVersions === null) {
+    warn(
+      'Could not locate a supabase/migrations directory above this module — skipping the ' +
+        'migration-ledger diff. The effect probes below still run and are still fatal.'
+    );
+  } else {
+    const ledger = await fetchAppliedMigrationVersions(ctx.admin);
+    if (!ledger.available) {
+      problems.push(`migration ledger unreadable: ${ledger.reason}`);
+    } else {
+      const missing = missingVersions(repoVersions, ledger.versions);
+      if (missing.length > 0) {
+        problems.push(
+          `${missing.length} migration(s) in this checkout are not applied to the database: ` +
+            missing.join(', ')
+        );
+      } else {
+        ok(
+          `all ${repoVersions.length} migration(s) in this checkout are applied ` +
+            `(database has ${ledger.versions.length}, latest ${ledger.versions[ledger.versions.length - 1]})`
+        );
+      }
+    }
+  }
+
+  // --- layer 2: effect probes ---
+  for (const expectation of SCHEMA_EXPECTATIONS) {
+    let result;
+    try {
+      result = await expectation.probe(ctx.admin);
+    } catch (err) {
+      result = {
+        present: false,
+        detail: `probe threw: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+
+    if (result.present) {
+      ok(`${expectation.migration}: ${expectation.describes} — ${result.detail}`);
+    } else {
+      problems.push(
+        `${expectation.migration}: ${expectation.describes} is MISSING (${result.detail})\n` +
+          `      consequence: ${expectation.consequence}`
+      );
+    }
+  }
+
+  if (problems.length > 0) {
+    fail(
+      `REFUSING TO RUN: the database is not running the schema this checkout expects.\n\n` +
+        problems.map((p) => `  - ${p}`).join('\n') +
+        `\n\n${MIGRATION_REMEDIATION}`
+    );
+  }
+
+  ok('database schema matches this checkout');
+}
+
+/**
  * Guard against the synthetic slug having been reused for something real.
  * Any conversation whose contact phone is not our synthetic number means this
  * org is carrying data the harness did not create, so we stop.
@@ -184,6 +270,11 @@ async function cmdPreflight(ctx: Ctx): Promise<void> {
   ok('service-role connection works');
 
   await assertWhatsAppDisabled(ctx);
+
+  // Ordered after the outbound-messaging invariant on purpose: the one thing
+  // that must be verified before anything else is that this run cannot reach a
+  // real customer. Everything below is read-only.
+  await assertSchemaUpToDate(ctx);
 
   const { data: flags, error: flagError } = await ctx.admin
     .from('feature_flags')
@@ -463,6 +554,10 @@ interface InjectResult {
 async function cmdInject(ctx: Ctx): Promise<InjectResult> {
   step('INJECT');
   await assertWhatsAppDisabled(ctx);
+  // Re-checked here as well as in preflight: `inject` is runnable on its own,
+  // and injecting against a stale schema produces a run whose result means
+  // nothing.
+  await assertSchemaUpToDate(ctx);
   const orgId = await requireOrg(ctx);
   await assertOrgIsSynthetic(ctx, orgId);
 
