@@ -17,7 +17,7 @@
  * draft-index.ts or index.ts; it lives under src/ purely so that lint,
  * typecheck and the test build cover it in CI. It is invoked manually:
  *
- *   pnpm --filter @tugpt/worker exec tsx src/e2e/milestone1.ts all \
+ *   pnpm --filter @tugpt/worker exec tsx src/e2e/milestone1.ts all \\
  *     --env-file /etc/tugpt/worker.env --env-file /etc/tugpt/web.env
  *
  * SAFETY. This writes to a live database, so every command re-checks the same
@@ -943,6 +943,18 @@ async function cmdEvidence(ctx: Ctx, providerMessageId: string | null): Promise<
       'id, draft_generation_job_id, status, created_at',
       (q: Db) => q.eq('organization_id', orgId)
     ),
+    // An empty auditLogs here is EXPECTED, not a finding. audit_logs has
+    // exactly two writers — create_organization and accept_invitation — and a
+    // milestone-1 run performs neither. The audit record for draft review
+    // actions is `reviewEvents` above. See ADR-009, "Amendment: the audit
+    // boundary". This note ships inside the evidence pack because the previous
+    // pack showed `auditLogs: []` next to a completed review and read as a
+    // missing audit trail.
+    auditTrailNote:
+      'audit_logs covers organization and membership lifecycle only ' +
+      '(organization.create, invitation.accept). Draft approve/edit/reject are ' +
+      'recorded in reviewEvents, which is the audit record for those actions ' +
+      '(ADR-009). An empty auditLogs is expected for a milestone-1 run.',
     auditLogs: await pick('audit_logs', 'id, action, resource, created_at', (q: Db) =>
       q.eq('organization_id', orgId).order('created_at', { ascending: false }).limit(25)
     ),
@@ -982,8 +994,55 @@ async function cmdEvidence(ctx: Ctx, providerMessageId: string | null): Promise<
   }
 
   const revisions = evidence.revisions as unknown[];
-  const reviewEvents = evidence.reviewEvents as unknown[];
+  const reviewEvents = evidence.reviewEvents as Array<{ action: string }>;
   ok(`${revisions.length} revision(s), ${reviewEvents.length} review event(s)`);
+
+  // The audit trail for a reviewed draft must exist. Stated as an assertion so
+  // that a genuinely missing trail fails the run, rather than being read past
+  // as `auditLogs: []` was on 2026-08-19. See ADR-009.
+  const reviewedDraft = (evidence.draft as Array<{ status?: string }>)[0];
+  if (reviewedDraft && (reviewedDraft.status === 'approved' || reviewedDraft.status === 'rejected')) {
+    if (reviewEvents.length === 0) {
+      fail(
+        `ASSERTION FAILED: draft is '${reviewedDraft.status}' but has zero rows in ` +
+          `ai_draft_review_events. That table is the audit record for draft review ` +
+          `actions (ADR-009), so this means the trail was not written.`
+      );
+    }
+    ok(
+      `audit trail present for the reviewed draft: ` +
+        `${reviewEvents.map((e) => e.action).join(' -> ')}`
+    );
+  }
+
+  // Finding #3 (2026-08-19): the completed job row carried provider=null,
+  // model=null while the draft carried langdock/gpt-5-mini. Fixed in
+  // 20260819000003; asserted here so it cannot regress silently, and so that
+  // per-model attribution stays trustworthy once rotation lands.
+  const job = (evidence.draftGenerationJob as Array<{
+    status?: string;
+    provider?: string | null;
+    model?: string | null;
+  }>)[0];
+  const draftRow = evidence.draft as Array<{ provider?: string | null; model?: string | null }>;
+  if (job && job.status === 'completed') {
+    if (!job.provider || !job.model) {
+      fail(
+        `ASSERTION FAILED: completed draft_generation_jobs row has ` +
+          `provider=${job.provider ?? 'null'} model=${job.model ?? 'null'}. ` +
+          `store_draft must record both at completion (migration 20260819000003).`
+      );
+    }
+    const draftProvider = draftRow[0]?.provider;
+    const draftModel = draftRow[0]?.model;
+    if (draftProvider && (job.provider !== draftProvider || job.model !== draftModel)) {
+      fail(
+        `ASSERTION FAILED: job attribution disagrees with the draft it produced ` +
+          `(job=${job.provider}/${job.model}, draft=${draftProvider}/${draftModel}).`
+      );
+    }
+    ok(`job attribution recorded: provider=${job.provider} model=${job.model}`);
+  }
 }
 
 async function cmdTeardown(ctx: Ctx): Promise<void> {
