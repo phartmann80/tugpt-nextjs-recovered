@@ -597,11 +597,24 @@ async function cmdWait(ctx: Ctx, providerMessageId: string, timeoutMs: number): 
         }
 
         if (job.status === 'dead_lettered') {
+          // Surface what the provider actually said. Before 2026-08-19 this
+          // was not recorded anywhere, so an invalid-model rejection looked
+          // identical to an outage and had to be reproduced by hand.
+          const { data: failed } = await ctx.admin
+            .from('failed_jobs')
+            .select('error_code, attempts, provider_error_detail')
+            .eq('queue_name', 'draft_generation')
+            .order('created_at', { ascending: false })
+            .limit(1);
+          const detail = failed?.[0]?.provider_error_detail;
+
           fail(
-            `draft job was DEAD-LETTERED (error_code=${job.error_code}, attempts=${job.attempts}). ` +
-              `DRAFT_PROVIDER_CONFIG_ERROR => LANGDOCK_API_CODE missing from the draft worker's env. ` +
-              `DRAFT_PROVIDER_AUTH_ERROR => the key is present but rejected by Langdock. ` +
-              `DRAFT_EXHAUSTED_RETRIES => three transient failures (Langdock down / rate limited).`
+            `draft job was DEAD-LETTERED (error_code=${job.error_code}, attempts=${job.attempts}).` +
+              (detail ? `\n  Provider said: ${detail}` : '\n  No provider detail recorded.') +
+              `\n  DRAFT_INVALID_REQUEST => the provider rejected the request (4xx); read "Provider said" above.` +
+              `\n  DRAFT_PROVIDER_CONFIG_ERROR => LANGDOCK_API_CODE missing, or LANGDOCK_MODEL not on the allowlist.` +
+              `\n  DRAFT_PROVIDER_AUTH_ERROR => the key is present but rejected by Langdock.` +
+              `\n  DRAFT_EXHAUSTED_RETRIES => three genuinely transient failures (Langdock down / rate limited).`
           );
         }
       }
@@ -838,9 +851,12 @@ async function cmdEvidence(ctx: Ctx, providerMessageId: string | null): Promise<
     auditLogs: await pick('audit_logs', 'id, action, resource, created_at', (q: Db) =>
       q.eq('organization_id', orgId).order('created_at', { ascending: false }).limit(25)
     ),
+    // provider_error_detail is what makes a provider-side rejection
+    // diagnosable from the evidence pack alone. Added 2026-08-19, after a
+    // Langdock 400 could only be identified by curling the API by hand.
     failedJobs: await pick(
       'failed_jobs',
-      'id, job_type, error_code, attempts, queue_name, created_at',
+      'id, job_type, error_code, attempts, queue_name, provider_error_detail, created_at',
       (q: Db) => q.order('created_at', { ascending: false }).limit(10)
     ),
   };

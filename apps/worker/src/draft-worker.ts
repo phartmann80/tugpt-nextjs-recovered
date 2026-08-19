@@ -256,7 +256,8 @@ export class DraftWorker {
           draftGenerationJobId,
           requestId,
           readCt,
-          result.error.category
+          result.error.category,
+          result.error.providerDetail
         );
       }
     } catch (err) {
@@ -289,16 +290,22 @@ export class DraftWorker {
     draftGenerationJobId: string,
     requestId: string | undefined,
     readCt: number,
-    errorCategory: ProviderErrorCategory
+    errorCategory: ProviderErrorCategory,
+    providerDetail?: string
   ): Promise<void> {
     const isTransient = isTransientCategory(errorCategory);
 
+    // providerDetail is already sanitized and truncated by ProviderError.
+    // Logging it is what makes a provider-side rejection (e.g. an invalid
+    // model) diagnosable from the logs alone, without reproducing the call
+    // against the live API by hand.
     logger.info('Provider failure', {
       draftGenerationJobId,
       requestId,
       attempt: readCt,
       errorCategory,
       isTransient,
+      providerDetail,
     });
 
     if (isTransient && readCt < 3) {
@@ -309,12 +316,13 @@ export class DraftWorker {
     } else if (isTransient && readCt >= 3) {
       // Third transient failure: retries exhausted, archive immediately.
       // The only approved code for exhausted transient retries.
-      await this.archiveFailed(msgId, draftGenerationJobId, 'DRAFT_EXHAUSTED_RETRIES');
+      await this.archiveFailed(msgId, draftGenerationJobId, 'DRAFT_EXHAUSTED_RETRIES', providerDetail);
     } else {
       // Permanent failure (fallback-prohibited): archive immediately
-      // with the mapped approved error code.
+      // with the mapped approved error code. No retries — a 4xx request
+      // error will fail identically every time.
       const archiveCode = mapProviderErrorToDbCode(errorCategory);
-      await this.archiveFailed(msgId, draftGenerationJobId, archiveCode);
+      await this.archiveFailed(msgId, draftGenerationJobId, archiveCode, providerDetail);
     }
   }
 
@@ -421,17 +429,73 @@ export class DraftWorker {
     }
   }
 
-  private async archiveFailed(msgId: bigint, jobId: string, errorCode: DraftErrorCode): Promise<void> {
+  /**
+   * Archive (dead-letter) a job, terminating it.
+   *
+   * A failed archive must never be swallowed. Before 2026-08-19 it was: the
+   * RPC's own error-code allowlist was narrower than the set the worker
+   * produced, so every terminal archive was rejected with P3B15, logged, and
+   * dropped. The queue message was then neither archived nor deleted, so it
+   * was redelivered until read_ct exceeded the limit and the read-side path
+   * dead-lettered it as DRAFT_EXHAUSTED_RETRIES — which is how a Langdock 400
+   * came to look like three exhausted retries with no provider error recorded.
+   *
+   * The allowlists are aligned again (migration 20260819000001), but a silent
+   * swallow is the wrong behaviour regardless of which codes are legal. If the
+   * archive is rejected we retry once with DRAFT_INTERNAL_ERROR — permanently
+   * in the RPC's allowlist — so the job always reaches a terminal state
+   * instead of looping. Any drift shows up as a loud log, not an invisible
+   * retry storm.
+   */
+  private async archiveFailed(
+    msgId: bigint,
+    jobId: string,
+    errorCode: DraftErrorCode,
+    providerDetail?: string
+  ): Promise<void> {
     const { error } = await this.client.rpc('archive_draft_failed_job', {
       p_msg_id: msgId.toString(),
       p_draft_generation_job_id: jobId,
       p_error_code: errorCode,
+      p_provider_error_detail: providerDetail ?? null,
     });
 
-    if (error) {
-      logger.error('Failed to archive draft job', new Error(error.code || 'UNKNOWN'), {
+    if (!error) {
+      return;
+    }
+
+    logger.error('Failed to archive draft job', new Error(error.code || 'UNKNOWN'), {
+      draftGenerationJobId: jobId,
+      queueMessageId: msgId.toString(),
+      attemptedErrorCode: errorCode,
+    });
+
+    if (errorCode === 'DRAFT_INTERNAL_ERROR') {
+      // The guaranteed-accepted code was itself rejected. Nothing further to
+      // try; leaving the message queued is preferable to losing it silently.
+      logger.error('Archive fallback also failed; job left on the queue', undefined, {
         draftGenerationJobId: jobId,
         queueMessageId: msgId.toString(),
+      });
+      return;
+    }
+
+    const { error: fallbackError } = await this.client.rpc('archive_draft_failed_job', {
+      p_msg_id: msgId.toString(),
+      p_draft_generation_job_id: jobId,
+      p_error_code: 'DRAFT_INTERNAL_ERROR',
+      p_provider_error_detail: providerDetail ?? `archive rejected for ${errorCode}`,
+    });
+
+    if (fallbackError) {
+      logger.error('Archive fallback also failed; job left on the queue', new Error(fallbackError.code || 'UNKNOWN'), {
+        draftGenerationJobId: jobId,
+        queueMessageId: msgId.toString(),
+      });
+    } else {
+      logger.info('Archived via DRAFT_INTERNAL_ERROR fallback after archive rejection', {
+        draftGenerationJobId: jobId,
+        attemptedErrorCode: errorCode,
       });
     }
   }

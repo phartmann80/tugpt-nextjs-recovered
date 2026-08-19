@@ -14,6 +14,7 @@ import {
   MOCK_PROVIDER,
   MOCK_MODEL,
   MOCK_QUEUE_MESSAGE,
+  MOCK_PROVIDER_DETAIL,
   type MockRpcConfig,
   type MockQueryConfig,
 } from './fixtures/draft-fixtures';
@@ -578,6 +579,246 @@ describe('DraftWorker', () => {
     expect(malformedArchiveCall).toBeDefined();
     expect(malformedArchiveCall[1].p_error_code).toBe('DRAFT_INVALID_REQUEST');
     expect(APPROVED_CODES.has('DRAFT_INVALID_REQUEST')).toBe(true);
+  });
+
+  // --- 2026-08-19 regression suite: terminal 4xx must not be retried ---
+  //
+  // The first end-to-end run failed because Langdock rejected `model: "auto"`
+  // with HTTP 400, and that terminal error presented as three exhausted
+  // retries with no provider explanation recorded. The classifier was already
+  // correct; the archive RPC's allowlist was narrower than the set the worker
+  // produced, so the archive was rejected, the message stayed on the queue,
+  // and the read-side path eventually dead-lettered it as
+  // DRAFT_EXHAUSTED_RETRIES. These tests pin every part of that fix.
+
+  it('archives a provider 400 immediately on the first attempt, with no retry', async () => {
+    const rpcConfig: MockRpcConfig = {
+      is_feature_enabled: { data: true, error: null },
+      reserve_draft_usage: { data: { status: 'NEWLY_RESERVED', reason: null }, error: null },
+      archive_draft_failed_job: { data: { archived: true, already_archived: false }, error: null },
+      set_draft_generation_visibility: { data: true, error: null },
+    };
+    const queryConfig: MockQueryConfig = {
+      draft_generation_jobs: { filters: { id: MOCK_JOB_ID }, data: MOCK_JOB_ROW },
+      messages: { filters: { id: MOCK_SOURCE_MESSAGE_ID }, data: { body: MOCK_SOURCE_TEXT } },
+      ai_draft_configs: {
+        filters: { business_profile_id: MOCK_BUSINESS_PROFILE_ID },
+        data: MOCK_DRAFT_CONFIG,
+      },
+    };
+    const client = createMockClient(rpcConfig, queryConfig);
+    const orchestrator = createMockOrchestrator('fail-invalid-model');
+    const worker = new DraftWorker(client, orchestrator as unknown as { generateDraft: (req: unknown) => Promise<unknown> }, {
+      pollIntervalMs: 100,
+      visibilityTimeoutSeconds: 30,
+    });
+
+    // read_ct = 1: a transient failure would retry here. A 400 must not.
+    await (worker as unknown as { processJob: (job: unknown) => Promise<void> }).processJob(MOCK_QUEUE_MESSAGE);
+
+    const rpcCalls = (client as unknown as { rpc: { mock: { calls: unknown[] } } }).rpc.mock.calls;
+
+    const archiveCall = rpcCalls.find((c: unknown[]) => c[0] === 'archive_draft_failed_job');
+    expect(archiveCall).toBeDefined();
+    expect(archiveCall[1].p_error_code).toBe('DRAFT_INVALID_REQUEST');
+    // Specifically NOT the code the original bug produced.
+    expect(archiveCall[1].p_error_code).not.toBe('DRAFT_EXHAUSTED_RETRIES');
+
+    // No retry was scheduled.
+    const visCall = rpcCalls.find((c: unknown[]) => c[0] === 'set_draft_generation_visibility');
+    expect(visCall).toBeUndefined();
+
+    // Exactly one provider call: the request was not repeated.
+    expect(orchestrator.generateDraft).toHaveBeenCalledOnce();
+  });
+
+  it("records the provider's own error on the dead-letter record", async () => {
+    const rpcConfig: MockRpcConfig = {
+      is_feature_enabled: { data: true, error: null },
+      reserve_draft_usage: { data: { status: 'NEWLY_RESERVED', reason: null }, error: null },
+      archive_draft_failed_job: { data: { archived: true, already_archived: false }, error: null },
+    };
+    const queryConfig: MockQueryConfig = {
+      draft_generation_jobs: { filters: { id: MOCK_JOB_ID }, data: MOCK_JOB_ROW },
+      messages: { filters: { id: MOCK_SOURCE_MESSAGE_ID }, data: { body: MOCK_SOURCE_TEXT } },
+      ai_draft_configs: {
+        filters: { business_profile_id: MOCK_BUSINESS_PROFILE_ID },
+        data: MOCK_DRAFT_CONFIG,
+      },
+    };
+    const client = createMockClient(rpcConfig, queryConfig);
+    const orchestrator = createMockOrchestrator('fail-invalid-model');
+    const worker = new DraftWorker(client, orchestrator as unknown as { generateDraft: (req: unknown) => Promise<unknown> }, {
+      pollIntervalMs: 100,
+      visibilityTimeoutSeconds: 30,
+    });
+
+    await (worker as unknown as { processJob: (job: unknown) => Promise<void> }).processJob(MOCK_QUEUE_MESSAGE);
+
+    const rpcCalls = (client as unknown as { rpc: { mock: { calls: unknown[] } } }).rpc.mock.calls;
+    const archiveCall = rpcCalls.find((c: unknown[]) => c[0] === 'archive_draft_failed_job');
+    expect(archiveCall[1].p_provider_error_detail).toBe(MOCK_PROVIDER_DETAIL);
+    // Without this, the failure is only diagnosable by calling the API by hand.
+    expect(archiveCall[1].p_provider_error_detail).toContain('Invalid model');
+  });
+
+  it('passes null detail rather than undefined when the provider gave none', async () => {
+    const rpcConfig: MockRpcConfig = {
+      is_feature_enabled: { data: true, error: null },
+      reserve_draft_usage: { data: { status: 'NEWLY_RESERVED', reason: null }, error: null },
+      archive_draft_failed_job: { data: { archived: true, already_archived: false }, error: null },
+    };
+    const queryConfig: MockQueryConfig = {
+      draft_generation_jobs: { filters: { id: MOCK_JOB_ID }, data: MOCK_JOB_ROW },
+      messages: { filters: { id: MOCK_SOURCE_MESSAGE_ID }, data: { body: MOCK_SOURCE_TEXT } },
+      ai_draft_configs: {
+        filters: { business_profile_id: MOCK_BUSINESS_PROFILE_ID },
+        data: MOCK_DRAFT_CONFIG,
+      },
+    };
+    const client = createMockClient(rpcConfig, queryConfig);
+    const orchestrator = createMockOrchestrator('fail-permanent');
+    const worker = new DraftWorker(client, orchestrator as unknown as { generateDraft: (req: unknown) => Promise<unknown> }, {
+      pollIntervalMs: 100,
+      visibilityTimeoutSeconds: 30,
+    });
+
+    await (worker as unknown as { processJob: (job: unknown) => Promise<void> }).processJob(MOCK_QUEUE_MESSAGE);
+
+    const rpcCalls = (client as unknown as { rpc: { mock: { calls: unknown[] } } }).rpc.mock.calls;
+    const archiveCall = rpcCalls.find((c: unknown[]) => c[0] === 'archive_draft_failed_job');
+    // PostgREST drops undefined; null is explicit and maps to SQL NULL.
+    expect(archiveCall[1].p_provider_error_detail).toBeNull();
+  });
+
+  it('falls back to DRAFT_INTERNAL_ERROR when the archive RPC rejects the code', async () => {
+    // Defense in depth against exactly the drift that caused the original bug:
+    // if the worker's code set and the RPC allowlist ever diverge again, the
+    // job must still terminate rather than loop invisibly.
+    const rpcCalls: Array<{ name: string; params: Record<string, unknown> }> = [];
+
+    const client = {
+      rpc: vi.fn().mockImplementation((name: string, params: Record<string, unknown>) => {
+        rpcCalls.push({ name, params });
+        if (name === 'is_feature_enabled') return Promise.resolve({ data: true, error: null });
+        if (name === 'reserve_draft_usage') {
+          return Promise.resolve({ data: { status: 'NEWLY_RESERVED', reason: null }, error: null });
+        }
+        if (name === 'archive_draft_failed_job') {
+          // Reject anything except the guaranteed-accepted fallback code,
+          // simulating P3B15 INVALID_DRAFT_FAILURE_CODE.
+          if (params.p_error_code !== 'DRAFT_INTERNAL_ERROR') {
+            return Promise.resolve({
+              data: null,
+              error: { code: 'P3B15', message: 'INVALID_DRAFT_FAILURE_CODE' },
+            });
+          }
+          return Promise.resolve({ data: { archived: true, already_archived: false }, error: null });
+        }
+        return Promise.resolve({ data: null, error: null });
+      }),
+      from: vi.fn().mockImplementation((table: string) => {
+        const data =
+          table === 'draft_generation_jobs'
+            ? MOCK_JOB_ROW
+            : table === 'messages'
+              ? { body: MOCK_SOURCE_TEXT }
+              : MOCK_DRAFT_CONFIG;
+        const qb = {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn(() => qb),
+          single: vi.fn().mockResolvedValue({ data, error: null }),
+        };
+        return qb;
+      }),
+    } as unknown as SupabaseClient;
+
+    const orchestrator = createMockOrchestrator('fail-invalid-model');
+    const worker = new DraftWorker(client, orchestrator as unknown as { generateDraft: (req: unknown) => Promise<unknown> }, {
+      pollIntervalMs: 100,
+      visibilityTimeoutSeconds: 30,
+    });
+
+    await (worker as unknown as { processJob: (job: unknown) => Promise<void> }).processJob(MOCK_QUEUE_MESSAGE);
+
+    const archiveAttempts = rpcCalls.filter((c) => c.name === 'archive_draft_failed_job');
+    expect(archiveAttempts).toHaveLength(2);
+    expect(archiveAttempts[0].params.p_error_code).toBe('DRAFT_INVALID_REQUEST');
+    expect(archiveAttempts[1].params.p_error_code).toBe('DRAFT_INTERNAL_ERROR');
+    // The provider's explanation survives into the fallback archive too.
+    expect(archiveAttempts[1].params.p_provider_error_detail).toBe(MOCK_PROVIDER_DETAIL);
+  });
+
+  it('does not retry the fallback forever if it is also rejected', async () => {
+    const archiveAttempts: string[] = [];
+
+    const client = {
+      rpc: vi.fn().mockImplementation((name: string, params: Record<string, unknown>) => {
+        if (name === 'is_feature_enabled') return Promise.resolve({ data: true, error: null });
+        if (name === 'reserve_draft_usage') {
+          return Promise.resolve({ data: { status: 'NEWLY_RESERVED', reason: null }, error: null });
+        }
+        if (name === 'archive_draft_failed_job') {
+          archiveAttempts.push(params.p_error_code as string);
+          return Promise.resolve({ data: null, error: { code: 'P3B15', message: 'nope' } });
+        }
+        return Promise.resolve({ data: null, error: null });
+      }),
+      from: vi.fn().mockImplementation((table: string) => {
+        const data =
+          table === 'draft_generation_jobs'
+            ? MOCK_JOB_ROW
+            : table === 'messages'
+              ? { body: MOCK_SOURCE_TEXT }
+              : MOCK_DRAFT_CONFIG;
+        const qb = {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn(() => qb),
+          single: vi.fn().mockResolvedValue({ data, error: null }),
+        };
+        return qb;
+      }),
+    } as unknown as SupabaseClient;
+
+    const orchestrator = createMockOrchestrator('fail-invalid-model');
+    const worker = new DraftWorker(client, orchestrator as unknown as { generateDraft: (req: unknown) => Promise<unknown> }, {
+      pollIntervalMs: 100,
+      visibilityTimeoutSeconds: 30,
+    });
+
+    await (worker as unknown as { processJob: (job: unknown) => Promise<void> }).processJob(MOCK_QUEUE_MESSAGE);
+
+    // Exactly two attempts: the mapped code, then the fallback. No unbounded loop.
+    expect(archiveAttempts).toEqual(['DRAFT_INVALID_REQUEST', 'DRAFT_INTERNAL_ERROR']);
+  });
+
+  it('still retries genuinely transient failures', async () => {
+    // Guard against over-correcting: 5xx must keep its retry behaviour.
+    const rpcConfig: MockRpcConfig = {
+      is_feature_enabled: { data: true, error: null },
+      reserve_draft_usage: { data: { status: 'NEWLY_RESERVED', reason: null }, error: null },
+      set_draft_generation_visibility: { data: true, error: null },
+    };
+    const queryConfig: MockQueryConfig = {
+      draft_generation_jobs: { filters: { id: MOCK_JOB_ID }, data: MOCK_JOB_ROW },
+      messages: { filters: { id: MOCK_SOURCE_MESSAGE_ID }, data: { body: MOCK_SOURCE_TEXT } },
+      ai_draft_configs: {
+        filters: { business_profile_id: MOCK_BUSINESS_PROFILE_ID },
+        data: MOCK_DRAFT_CONFIG,
+      },
+    };
+    const client = createMockClient(rpcConfig, queryConfig);
+    const orchestrator = createMockOrchestrator('fail-transient');
+    const worker = new DraftWorker(client, orchestrator as unknown as { generateDraft: (req: unknown) => Promise<unknown> }, {
+      pollIntervalMs: 100,
+      visibilityTimeoutSeconds: 30,
+    });
+
+    await (worker as unknown as { processJob: (job: unknown) => Promise<void> }).processJob(MOCK_QUEUE_MESSAGE);
+
+    const rpcCalls = (client as unknown as { rpc: { mock: { calls: unknown[] } } }).rpc.mock.calls;
+    expect(rpcCalls.find((c: unknown[]) => c[0] === 'set_draft_generation_visibility')).toBeDefined();
+    expect(rpcCalls.find((c: unknown[]) => c[0] === 'archive_draft_failed_job')).toBeUndefined();
   });
 
   // --- Stage 8A: Safe-disabled startup correction tests ---

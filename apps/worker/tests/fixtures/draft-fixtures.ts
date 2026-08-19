@@ -109,8 +109,21 @@ export function createMockClient(
 
 // --- Mock orchestrator ---
 
+/**
+ * Sanitized provider detail as it arrives from a real Langdock 400.
+ * Mirrors the failure seen on 2026-08-19 (`model: "auto"` rejected).
+ */
+export const MOCK_PROVIDER_DETAIL =
+  'invalid_request_error: Invalid model, available models are: gpt-5-mini, gpt-5, o3';
+
 export function createMockOrchestrator(
-  behavior: 'success' | 'fail-transient' | 'fail-permanent' | 'fail-empty' | 'fail-oversized'
+  behavior:
+    | 'success'
+    | 'fail-transient'
+    | 'fail-permanent'
+    | 'fail-empty'
+    | 'fail-oversized'
+    | 'fail-invalid-model'
 ) {
   return {
     generateDraft: vi.fn().mockImplementation(async () => {
@@ -157,6 +170,18 @@ export function createMockOrchestrator(
             error: {
               provider: 'langdock',
               category: 'OUTPUT_TOO_LONG',
+            },
+          };
+        case 'fail-invalid-model':
+          // A 400 from the provider: terminal, and it carries the provider's
+          // own explanation of what was wrong.
+          return {
+            success: false as const,
+            error: {
+              provider: 'langdock',
+              category: 'HTTP_400',
+              httpStatus: 400,
+              providerDetail: MOCK_PROVIDER_DETAIL,
             },
           };
         default:
