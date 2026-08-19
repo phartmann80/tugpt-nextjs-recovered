@@ -17,7 +17,7 @@
  * draft-index.ts or index.ts; it lives under src/ purely so that lint,
  * typecheck and the test build cover it in CI. It is invoked manually:
  *
- *   pnpm --filter @tugpt/worker exec tsx src/e2e/milestone1.ts all \\
+ *   pnpm --filter @tugpt/worker exec tsx src/e2e/milestone1.ts all \
  *     --env-file /etc/tugpt/worker.env --env-file /etc/tugpt/web.env
  *
  * SAFETY. This writes to a live database, so every command re-checks the same
