@@ -15,10 +15,13 @@ Every production environment deployment requires the following variables to be e
 | `SUPABASE_SERVICE_ROLE_KEY` | Production Supabase Service Role Key | **SECRET**. Server-side only. Must NEVER leak to client-side bundles. |
 | `LANGDOCK_API_CODE` | Production Langdock Integration API Key (sole draft provider, see ADR-006) | **SECRET**. Server-side only. |
 | `LANGDOCK_ENDPOINT_URL` | Production Langdock Endpoint URL (optional — defaults to `https://api.langdock.com/openai/eu/v1`) | Server-side only. |
+| `LANGDOCK_MODEL` | Langdock model (optional — defaults to `gpt-5-mini`). Allowed: `gpt-5-mini`, `gpt-5.1`, `gpt-5.2`, `gpt-5`. Anything else is rejected at worker boot. See ADR-006. | Server-side only. Not a secret. |
 | `GATEWAY_API_MASTRA_KEY` | Production Mastra Orchestrator API Key | **SECRET**. Server-side only. |
 | `GATEWAY_API_URL` | Production Mastra Endpoint URL | Server-side only. |
 
-**Removed as of 2026-08-18 (see ADR-006):** `LOGICC_API_KEY`, `LOGICC_ENDPOINT_URL`, `LOGICC_DEFAULT_MODEL`, `ANYMIZE_API_KEY`, `ANYMIZE_ENDPOINT_URL`, `ANYMIZE_DEFAULT_MODEL`, and `MODEL` are no longer read anywhere in the codebase. Logicc was cut for cost; Anymize was removed to avoid cross-project coupling (it remains in use on other projects); model selection is Langdock's `auto` routing, not a pinned value, so no model env var is needed. Do not add these back without a separate, explicit decision.
+**Removed as of 2026-08-18 (see ADR-006):** `LOGICC_API_KEY`, `LOGICC_ENDPOINT_URL`, `LOGICC_DEFAULT_MODEL`, `ANYMIZE_API_KEY`, `ANYMIZE_ENDPOINT_URL`, `ANYMIZE_DEFAULT_MODEL`, and `MODEL` are no longer read anywhere in the codebase. Logicc was cut for cost; Anymize was removed to avoid cross-project coupling (it remains in use on other projects). Do not add these back without a separate, explicit decision.
+
+**Correction (2026-08-19):** this section previously said model selection was Langdock's `auto` routing and that no model env var was needed. That was wrong — Langdock's OpenAI-compatible endpoint has no `auto` model and returns HTTP 400 for it. Model selection is now `LANGDOCK_MODEL` (default `gpt-5-mini`), validated against a four-model allowlist. The generic `MODEL` variable really is dead: its last reader was deleted with `AIProviderFactory` in PR #17.
 
 ---
 
