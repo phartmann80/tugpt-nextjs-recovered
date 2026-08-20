@@ -4,6 +4,12 @@
 // Amendment 1: Only visible when status is draft. Terminal drafts show no actions.
 // Amendment 7: No Send or Send to WhatsApp control anywhere.
 // Handles optimistic lock version and stale-version conflict.
+//
+// 2026-08-19: the editor now opens on the draft it is editing. It previously
+// opened empty, so changing one word in an AI draft meant retyping the whole
+// thing — in a product whose premise is AI drafts plus human edit. Found by
+// reading the browser path the milestone-1 harness never exercises, because
+// the harness calls edit_draft directly with a body.
 
 import { useState } from 'react';
 import type { ApiError } from '@/lib/draft-api/types';
@@ -11,6 +17,12 @@ import type { ApiError } from '@/lib/draft-api/types';
 interface DraftActionsProps {
   draftId: string;
   version: number;
+  /**
+   * The body the reviewer is looking at. Seeds the editor when Edit is
+   * clicked, so an edit starts from the draft rather than from nothing.
+   * Null when the draft has no readable revision.
+   */
+  currentBody: string | null;
   onActionComplete: () => void;
   onStaleVersion: () => void;
 }
@@ -18,6 +30,7 @@ interface DraftActionsProps {
 export function DraftActions({
   draftId,
   version,
+  currentBody,
   onActionComplete,
   onStaleVersion,
 }: DraftActionsProps) {
@@ -200,7 +213,13 @@ export function DraftActions({
             {submitting ? 'Processing...' : 'Approve'}
           </button>
           <button
-            onClick={() => setEditing(true)}
+            onClick={() => {
+              // Seeded here rather than in useState so it always reflects the
+              // latest body, including after a reload or another reviewer's
+              // edit. A useState initialiser would capture the first render.
+              setEditBody(currentBody ?? '');
+              setEditing(true);
+            }}
             disabled={submitting}
             className="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
           >

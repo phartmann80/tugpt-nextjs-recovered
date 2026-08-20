@@ -23,6 +23,12 @@ export function DraftDetail({ draftId }: { draftId: string }) {
   const [reloadKey, setReloadKey] = useState(0);
 
   const handleActionComplete = () => {
+    // Show the loading state again while the refetch is in flight. Without
+    // this the action buttons stay live on the pre-action version for the
+    // duration of the round trip, so an immediate second action sends a stale
+    // version and comes back 409 "modified by another reviewer" — blaming a
+    // second reviewer for the first one's own edit.
+    setLoading(true);
     setReloadKey((k) => k + 1);
   };
 
@@ -220,6 +226,7 @@ export function DraftDetail({ draftId }: { draftId: string }) {
         <DraftActions
           draftId={draft.id}
           version={draft.version}
+          currentBody={draft.current_revision_body ?? null}
           onActionComplete={handleActionComplete}
           onStaleVersion={handleStaleVersion}
         />
