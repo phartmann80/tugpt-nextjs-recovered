@@ -259,4 +259,8 @@ SELECT is(
 -- CLEANUP: rollback at end of file (handled by ROLLBACK at end of test run)
 -- =============================================================================
 
+-- finish() emits the plan-versus-ran diagnostic. Added 2026-08-20: without it
+-- a file that stops early (an exception aborting the transaction, say) still
+-- looks like a clean run to pg_prove.
+SELECT * FROM finish();
 ROLLBACK;
