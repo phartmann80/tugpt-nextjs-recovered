@@ -2,7 +2,7 @@
 
 **Status:** active
 **Gate:** CI job `database-tests` in `.github/workflows/ci.yml`
-**Files:** `supabase/tests/database/*.sql` — 19 files, ~360 pgTAP assertions
+**Files:** `supabase/tests/database/*.sql` — 20 files, ~390 pgTAP assertions
 
 ## Why this document exists
 
@@ -55,6 +55,7 @@ container — use it after adding a migration rather than restarting.
 | `phase3b_store_archive.test.sql`, `phase3b_integrity.test.sql` | draft persistence, archival, and that `failed_jobs` carries no customer content |
 | `phase3b_quota.test.sql` | reservation/consumption atomicity |
 | `phase3b_schema.test.sql`, `phase3b_draft_rpc_wrappers.test.sql` | schema and function shape — the assertions that catch migration drift |
+| `draft_attribution_and_audit.test.sql` | the 2026-08-19 migrations: provider-error detail and its 512-char backstop, the extended dead-letter allowlist, provider/model on the completed job row, review events append-only and surviving reviewer erasure, `applied_migration_versions` and its grants |
 | `webhook_ingestion.test.sql`, `worker_processing.test.sql`, `queue_read_visibility.test.sql`, `dead_letter.test.sql`, `conversation_lifecycle.test.sql` | the inbound path and PGMQ semantics |
 | `phase3b_feature_flag_rls.test.sql` | `is_feature_enabled` and its RLS |
 | `invitations_and_ownership.test.sql` | membership lifecycle, double-acceptance protection |
@@ -94,6 +95,13 @@ Assertions about schema shape live in `phase3b_schema.test.sql` and
 signature, adds a column, or changes nullability, update them in the same PR —
 the gate will tell you, but only for the shape you already asserted. A new
 column nobody asserts is a new column nobody tests.
+
+Behaviour a migration introduces needs its own assertions, and those belong with
+the concern rather than with the migration date.
+`draft_attribution_and_audit.test.sql` is the example: it exists because the
+three 2026-08-19 migrations shipped with none, which is how the older
+shape assertions were free to drift behind them. If a new file is the right home,
+add it to the table above so the suite stays legible.
 
 Dropping and recreating a function to change its arity deserves a
 `hasnt_function` assertion on the old signature as well as a `has_function` on
