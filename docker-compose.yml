@@ -3,9 +3,10 @@
 # Production runtime for TuGPT.ai on its dedicated VPS (212.227.44.13 —
 # see docs/production_environment.md, section 5, for the full deployment
 # runbook, including the cutover plan from the existing systemd-native
-# workers to this stack). Intended to be run from /opt/tugpt as:
+# workers to this stack). Run from /opt/tugpt. Today that means the web
+# service only — read the warning below before running it unfiltered:
 #
-#   docker compose -p tugpt up -d --build
+#   docker compose -p tugpt up -d --build web
 #
 # The explicit `-p tugpt` project name namespaces containers/networks
 # under a stable, predictable prefix regardless of what else runs on the
@@ -18,12 +19,55 @@
 # the existing systemd-native workers' env layout
 # (/etc/tugpt/web.env, /etc/tugpt/worker.env) so the cutover doesn't
 # require re-provisioning secrets.
+#
+# ---------------------------------------------------------------------
+# WARNING — bringing this whole file up starts worker containers.
+#
+# `whatsapp-worker` and `draft-worker` below are the SAME jobs that
+# tugpt-whatsapp-worker.service and tugpt-draft-worker.service run
+# natively on the host today. Starting the full stack while those
+# systemd units are active puts two consumers on each PGMQ queue
+# (whatsapp_inbound, draft_generation) and double-processes every
+# message.
+#
+# As of 2026-08-20 only the web app is being containerized; the workers
+# stay on systemd. Deploy web ALONE:
+#
+#   docker compose -p tugpt up -d --build web
+#
+# or via deploy/systemd/tugpt-web.service, which does exactly that and
+# nothing else. deploy/systemd/tugpt.service brings up the whole stack
+# and must not be enabled until the worker cutover in section 5.4 of
+# docs/production_environment.md is executed deliberately.
+# ---------------------------------------------------------------------
 
 services:
   web:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      # Next.js inlines NEXT_PUBLIC_* at BUILD time, into the server bundle as
+      # well as the client one. Without this args block Compose forwards
+      # nothing — shell variables on the `docker compose build` command line are
+      # used for interpolation, not passed to the builder — so the Dockerfile's
+      # ARGs default to empty and the image is built with blank values.
+      #
+      # That failure is silent and total. proxy.ts reads
+      # NEXT_PUBLIC_SUPABASE_URL and redirects to /auth/login when it is empty,
+      # so every /dashboard route bounces to the login page forever; server.ts
+      # throws "Supabase URL is missing"; every /api/v1 route builds a client
+      # against ''. The app looks deployed and is entirely dead, and it reads
+      # like an authentication bug rather than a build one.
+      #
+      # `:?` makes Compose refuse to run rather than bake empties. Supply them
+      # by sourcing the env file first — see docs/production_environment.md
+      # section 5.4a:
+      #   set -a; . /etc/tugpt/web.env; set +a
+      # Neither value is a secret (the anon key is public by design); they are
+      # kept in web.env so there is one place to change them.
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: "${NEXT_PUBLIC_SUPABASE_URL:?missing - run 'set -a; . /etc/tugpt/web.env; set +a' before building}"
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: "${NEXT_PUBLIC_SUPABASE_ANON_KEY:?missing - run 'set -a; . /etc/tugpt/web.env; set +a' before building}"
     image: tugpt-web:latest
     restart: unless-stopped
     env_file:

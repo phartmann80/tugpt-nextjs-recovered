@@ -19,17 +19,36 @@
 # See docs/production_environment.md (section 5) for the full runbook,
 # including the expected working directory layout and /etc/tugpt/*.env
 # files this depends on.
+#
+# DO NOT ENABLE THIS UNIT YET (as of 2026-08-20).
+#
+# It brings up the WHOLE compose file, which includes whatsapp-worker and
+# draft-worker. Those are the same jobs tugpt-whatsapp-worker.service and
+# tugpt-draft-worker.service run natively on the host right now, so enabling
+# this while they are active puts two consumers on each PGMQ queue and
+# double-processes every message. The web app was authorized to move onto the
+# VPS on 2026-08-20; the workers were not.
+#
+# To run the web app alone, use deploy/systemd/tugpt-web.service — see section
+# 5.4a of the runbook. This unit is for the worker cutover in section 5.4,
+# which stops and disables the native units in the same sequence. The two units
+# declare Conflicts= on each other so they cannot both be active.
 
 [Unit]
 Description=TuGPT.ai Docker Compose stack
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
+Conflicts=tugpt-web.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/opt/tugpt
+# Supplies NEXT_PUBLIC_* for Compose build-arg interpolation; docker-compose.yml
+# declares them with `:?` so a missing value fails the unit instead of baking an
+# empty string into the web image.
+EnvironmentFile=/etc/tugpt/web.env
 ExecStart=/usr/bin/docker compose -p tugpt -f /opt/tugpt/docker-compose.yml up -d --build --remove-orphans
 ExecStop=/usr/bin/docker compose -p tugpt -f /opt/tugpt/docker-compose.yml down
 TimeoutStartSec=0
