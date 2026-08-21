@@ -5,7 +5,7 @@
 -- File: supabase/tests/database/phase3b_feature_flag_rls.test.sql
 
 BEGIN;
-SELECT plan(9);
+SELECT plan(11);
 
 -- Setup: Create test org, members, and feature flags
 INSERT INTO auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_app_meta_data, raw_user_meta_data, is_super_admin, confirmation_token, recovery_token, email_change_token_new, email_change)
@@ -155,6 +155,42 @@ BEGIN
 END;
 $$;
 SELECT is((SELECT cnt FROM _p8) > 0, true, 'P8: service_role can read global rows');
+
+-- =============================================================================
+-- P9-P10: both switches ship OFF
+--
+-- These assert the DEFAULT a fresh database is built with, not the live value
+-- in any deployed environment — turning a flag on in staging is a database edit
+-- that never touches this repository, and nothing here would notice it. What
+-- they guard is the repository: a migration or seed that ships either switch in
+-- the on position fails CI.
+--
+-- For whatsapp_integration that is the point. Flipping it is meant to be a
+-- deliberate code change with owner approval, never a quiet default.
+-- =============================================================================
+
+SELECT is(
+  (SELECT is_enabled FROM public.feature_flags
+   WHERE organization_id IS NULL AND key = 'ai_draft_generation'),
+  false,
+  'P9: the global ai_draft_generation row exists and ships disabled (20260805000011)'
+);
+
+-- whatsapp_integration has no global row at all, and is safe because of it:
+-- is_feature_enabled ANDs the global row with the org row inside
+-- COALESCE(..., false), so a missing global row resolves to false no matter
+-- what an organization sets. That is worth proving rather than reasoning about,
+-- because it is the behaviour a global row set to `true` would silently undo.
+-- The org row below is deliberately `true`; the answer must still be false.
+INSERT INTO public.feature_flags (organization_id, key, is_enabled, rules)
+VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'whatsapp_integration', true, '{}'::jsonb)
+ON CONFLICT DO NOTHING;
+
+SELECT is(
+  public.is_feature_enabled('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'whatsapp_integration'),
+  false,
+  'P10: whatsapp_integration resolves false even for an org that set its own row true'
+);
 
 SELECT finish();
 ROLLBACK;
