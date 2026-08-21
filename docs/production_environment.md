@@ -15,13 +15,14 @@ Every production environment deployment requires the following variables to be e
 | `SUPABASE_SERVICE_ROLE_KEY` | Production Supabase Service Role Key | **SECRET**. Server-side only. Must NEVER leak to client-side bundles. |
 | `LANGDOCK_API_CODE` | Production Langdock Integration API Key (sole draft provider, see ADR-006) | **SECRET**. Server-side only. |
 | `LANGDOCK_ENDPOINT_URL` | Production Langdock Endpoint URL (optional — defaults to `https://api.langdock.com/openai/eu/v1`) | Server-side only. |
-| `LANGDOCK_MODEL` | Langdock model (optional — defaults to `gpt-5-mini`). Allowed: `gpt-5-mini`, `gpt-5.1`, `gpt-5.2`, `gpt-5`. Anything else is rejected at worker boot. See ADR-006. | Server-side only. Not a secret. |
+| `LANGDOCK_MODELS` | Ordered rotation list, cheapest first, e.g. `gpt-5-mini,gpt-5.1,gpt-5.2,gpt-5`. On a per-model quota rejection the next model is tried within the same attempt. Defaults to the whole allowlist when unset. **This is what the server runs.** See ADR-006. | Server-side only. Not a secret. |
+| `LANGDOCK_MODEL` | Pins exactly one model and disables rotation. Kept for deployments predating rotation, and as the escape hatch. Ignored when `LANGDOCK_MODELS` is also set — the more specific variable wins, and the override is logged at boot. Allowed values: `gpt-5-mini`, `gpt-5.1`, `gpt-5.2`, `gpt-5`. Anything else is rejected at worker boot. | Server-side only. Not a secret. |
 | `GATEWAY_API_MASTRA_KEY` | Production Mastra Orchestrator API Key | **SECRET**. Server-side only. |
 | `GATEWAY_API_URL` | Production Mastra Endpoint URL | Server-side only. |
 
 **Removed as of 2026-08-18 (see ADR-006):** `LOGICC_API_KEY`, `LOGICC_ENDPOINT_URL`, `LOGICC_DEFAULT_MODEL`, `ANYMIZE_API_KEY`, `ANYMIZE_ENDPOINT_URL`, `ANYMIZE_DEFAULT_MODEL`, and `MODEL` are no longer read anywhere in the codebase. Logicc was cut for cost; Anymize was removed to avoid cross-project coupling (it remains in use on other projects). Do not add these back without a separate, explicit decision.
 
-**Correction (2026-08-19):** this section previously said model selection was Langdock's `auto` routing and that no model env var was needed. That was wrong — Langdock's OpenAI-compatible endpoint has no `auto` model and returns HTTP 400 for it. Model selection is now `LANGDOCK_MODEL` (default `gpt-5-mini`), validated against a four-model allowlist. The generic `MODEL` variable really is dead: its last reader was deleted with `AIProviderFactory` in PR #17.
+**Correction (2026-08-19):** this section previously said model selection was Langdock's `auto` routing and that no model env var was needed. That was wrong — Langdock's OpenAI-compatible endpoint has no `auto` model and returns HTTP 400 for it. Model selection is now `LANGDOCK_MODELS` (rotation) or `LANGDOCK_MODEL` (pinned), validated against a four-model allowlist. The generic `MODEL` variable really is dead: its last reader was deleted with `AIProviderFactory` in PR #17.
 
 ---
 
@@ -57,7 +58,9 @@ The background workers (draft worker, WhatsApp worker) run via `tsx` (npx tsx) i
 
 See ADR-013 for the decision record. This section is the operational runbook.
 
-TuGPT runs on its own dedicated VPS at **`212.227.44.13`** — not a shared host, not Vercel. This is the same server that already runs `tugpt-whatsapp-worker` and `tugpt-draft-worker` as systemd-native Node processes today. This section describes moving those two services (plus the web app, newly) onto the Docker Compose stack added in PR #13, and retiring the systemd-native workers in the same change — not running both side by side.
+TuGPT runs on its own dedicated VPS at **`212.227.44.13`** — not a shared host, not Vercel. Vercel is no longer used at all; the deployment model is push to GitHub, deploy to this server. This is the same server that already runs `tugpt-whatsapp-worker` and `tugpt-draft-worker` as systemd-native Node processes today.
+
+**Read 5.4a before 5.4.** As of 2026-08-20 only the **web app** has been authorized to move onto Docker; the workers stay systemd-native and untouched. 5.4a is that deployment. 5.4 below is the *worker* cutover — a separate, later change that retires the native units in one sequence rather than running both side by side, and that must not be started early.
 
 ### 5.1 Server layout
 
@@ -89,6 +92,17 @@ Target (after cutover):
   tugpt-draft-worker.service       # disabled after cutover, kept on disk for rollback
 ```
 
+Interim (as of 2026-08-20 — web on Docker, workers still native):
+
+```
+/etc/systemd/system/
+  tugpt-web.service                # (new) runs ONLY the compose `web` service
+  tugpt-whatsapp-worker.service    # unchanged, still enabled and running
+  tugpt-draft-worker.service       # unchanged, still enabled and running
+```
+
+This is the state section 5.4a produces, and the one to deploy today. `tugpt.service` is not installed or enabled in it — see 5.4a for why enabling it now would double-consume the queues.
+
 `worker.env` already exists on this server and can be reused as-is for the containerized workers — same variable names, same file. `web.env` is new (the web app has never been deployed to this server before) and, in addition to the server secrets, needs `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` available as Docker build args (see 5.3), because Next.js inlines `NEXT_PUBLIC_*` values into the client bundle at build time, not at container start.
 
 ### 5.2 Pre-deploy security checklist
@@ -113,11 +127,11 @@ chmod 700 /etc/tugpt
 # create /etc/tugpt/web.env from .env.example, filled in with real
 # production values, chmod 600.
 
-cp deploy/systemd/tugpt.service /etc/systemd/system/tugpt.service
+cp deploy/systemd/tugpt-web.service /etc/systemd/system/tugpt-web.service
 systemctl daemon-reload
 ```
 
-Do **not** `systemctl enable --now tugpt.service` yet — see the cutover sequence in 5.4 first, so the containerized and systemd-native workers are never both polling the queues at once.
+Install `tugpt-web.service`, not `tugpt.service` — see 5.4a. `tugpt.service` supervises the *whole* compose stack, including worker containers, and belongs to the worker cutover in 5.4. Do **not** `systemctl enable --now tugpt.service` while the systemd-native workers are running, or both will poll the same queues at once.
 
 ### 5.4 Cutover from systemd-native workers to Docker Compose
 
@@ -150,7 +164,71 @@ The existing `tugpt-whatsapp-worker` and `tugpt-draft-worker` systemd services a
 
 If anything in step 4 looks wrong — either side polling when it shouldn't, or neither side polling — stop and do not proceed; re-enable the systemd-native workers (`systemctl enable --now tugpt-whatsapp-worker tugpt-draft-worker`) and stop the compose stack (`systemctl stop tugpt.service`) to get back to a known-good single source of truth while debugging.
 
+### 5.4a Web-only deployment (authorized 2026-08-20 — workers stay on systemd)
+
+This is the sequence to run **today**. Section 5.4 above is the *worker* cutover and is not authorized: the workers stay exactly as they are, systemd-native, untouched.
+
+The distinction matters because `tugpt.service` brings up the whole compose file — `web`, `whatsapp-worker` and `draft-worker`. Starting it now would put a second consumer on `whatsapp_inbound` and `draft_generation` alongside the running native units and double-process every message. `tugpt-web.service` exists for exactly this situation: it runs `docker compose up -d --build web` and nothing else. The two units declare `Conflicts=` on each other so they cannot both be active.
+
+```bash
+cd /opt/tugpt
+git pull                                  # deploy the intended commit
+
+# One-time: create /etc/tugpt/web.env from .env.example with real values,
+# chown root:root, chmod 600. It needs NEXT_PUBLIC_SUPABASE_URL,
+# NEXT_PUBLIC_SUPABASE_ANON_KEY and SUPABASE_SERVICE_ROLE_KEY at minimum.
+install -m 600 -o root -g root /dev/null /etc/tugpt/web.env   # then edit it
+
+cp deploy/systemd/tugpt-web.service /etc/systemd/system/tugpt-web.service
+systemctl daemon-reload
+systemctl enable --now tugpt-web.service
+```
+
+**Why the env file has to be sourced for a manual build.** Next.js inlines `NEXT_PUBLIC_*` at build time, into the *server* bundle as well as the client one, so those two values must be present as Docker build args. `docker-compose.yml` declares them with `${VAR:?...}`, which fails the build loudly rather than baking empty strings. `tugpt-web.service` supplies them via `EnvironmentFile=/etc/tugpt/web.env`; building by hand does not, so source it first:
+
+```bash
+set -a; . /etc/tugpt/web.env; set +a
+docker compose -p tugpt up -d --build web
+```
+
+Getting this wrong used to be silent and total: an image built with empty `NEXT_PUBLIC_SUPABASE_URL` sends every `/dashboard` request to `/auth/login` (see the guard in `apps/web/src/proxy.ts`), `server.ts` throws "Supabase URL is missing", and every `/api/v1` route builds a client against `''`. The app looks deployed and is entirely dead, and it reads like an authentication bug rather than a build one.
+
+**Verify.**
+
+```bash
+# The workers must be exactly as they were — this deploy does not touch them.
+systemctl is-active tugpt-whatsapp-worker tugpt-draft-worker    # active, active
+
+# Exactly one container, and it is web.
+docker compose -p tugpt ps
+
+# Loopback only. 3001 must not appear on 0.0.0.0 (see 5.2).
+ss -tlnp | grep 3001
+
+# Health.
+curl -fsS http://127.0.0.1:3001/api/v1/health
+# {"status":"ok","app":"TuGPT.ai","version":"1.0.0",...}
+
+docker compose -p tugpt logs --tail=50 web
+```
+
+**Rollback** is `systemctl disable --now tugpt-web.service`. Nothing else on the host is affected, because nothing else was changed.
+
+**Two things this does not do, both deliberate:**
+
+- **No public reachability.** The container binds `127.0.0.1:3001` only, and this repo contains no reverse proxy — nginx/Caddy and TLS termination are out of scope here (5.1). Until one is configured, the dashboard is reachable *on* the server and not from a browser elsewhere. Once it is, Supabase Auth also needs the new origin added to its redirect allowlist and `site_url`, which is Supabase configuration, not a repo change.
+- **No feature flags move.** `ai_draft_generation` and `whatsapp_integration` stay disabled. This section is about where the app runs.
+
 ### 5.5 Building and deploying a new release (post-cutover)
+
+Until the worker cutover happens, the interim equivalent is two lines — `tugpt-web.service` sources the env file itself, so there is no separate build step to get the args right:
+
+```bash
+cd /opt/tugpt && git pull
+systemctl restart tugpt-web
+```
+
+After the worker cutover:
 
 ```bash
 cd /opt/tugpt
@@ -162,9 +240,9 @@ systemctl restart tugpt
 docker compose -p tugpt logs -f   # watch startup
 ```
 
-`systemctl restart tugpt` re-runs `docker compose up -d --build`, so a plain restart picks up an already-built image; run the explicit `build` step above first whenever source changed, so the build args (which are not read from `/etc/tugpt/*.env`) are supplied correctly.
+`systemctl restart tugpt` re-runs `docker compose up -d --build`, and both units now carry `EnvironmentFile=/etc/tugpt/web.env`, so a restart supplies the `NEXT_PUBLIC_*` build args on its own. The explicit `build` step is only needed when building by hand outside systemd — and in that case source the env file first (5.4a), because `docker-compose.yml` declares those args with `${VAR:?...}` and will refuse to build without them rather than bake empty strings into the image.
 
 ### 5.6 Explicitly not part of this deployment work
 
-- Langdock production credentials and enabling `ai_draft_generation` are handled separately, gated on the provider simplification PR (see ADR-006) being approved and merged, and on the running staging workers' env being updated — not just the repo. Nothing here changes that.
+- Langdock production credentials and enabling `ai_draft_generation` are handled separately — the provider work (ADR-006, rotation in PR #23) is merged and `LANGDOCK_MODELS` is set on the server, but turning the feature on is the controlled rollout in `docs/controlled-rollout.md`, not a deployment step. Nothing here changes that.
 - `whatsapp_integration` stays `false`. This section covers *where the app runs*, not turning features on.
