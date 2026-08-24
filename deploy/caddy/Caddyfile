@@ -1,0 +1,49 @@
+# deploy/caddy/Caddyfile
+#
+# TLS termination and public routing for the TuGPT dashboard.
+#
+# The web container binds 127.0.0.1:3001 on the host and is unreachable from
+# anywhere else, which is correct — but it also means that after the web-only
+# deployment (docs/production_environment.md section 5.4a) a reviewer cannot
+# open the dashboard in a browser. This is the piece that closes that gap.
+#
+# Caddy rather than nginx: certificates are obtained and renewed automatically
+# from Let's Encrypt with no certbot, no cron entry, and no renewal that can
+# quietly stop working. The whole configuration is the twenty lines below.
+#
+# It is OFF by default. The compose service carries `profiles: ["proxy"]`, so
+# `docker compose up -d web` does not start it and cannot start it by accident.
+# Enabling it is section 5.4b.
+#
+# TUGPT_DOMAIN comes from /etc/tugpt/web.env via the container's env_file.
+#
+# The placeholder default is deliberate and is not a fallback anyone should
+# rely on. With TUGPT_DOMAIN unset the site address would otherwise be empty,
+# and Caddy then reads the `{` below as a global options block and fails with
+# "unrecognized global option: encode" — which says nothing about the actual
+# problem. The .invalid name makes the failure name itself: Caddy starts,
+# refuses to obtain a certificate for it, and says so with the string
+# TUGPT_DOMAIN-is-not-set in the message.
+#
+# Reaching `web:3000` uses the compose network directly, not the published host
+# port, so this works whether or not 3001 is published and never leaves the
+# Docker bridge.
+
+{$TUGPT_DOMAIN:TUGPT_DOMAIN-is-not-set.invalid} {
+	encode zstd gzip
+
+	header {
+		# The dashboard is served over HTTPS only once this is in front of it.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# Caddy sets X-Forwarded-For, -Proto and -Host on its own; X-Real-IP is
+	# added because it is what most log tooling expects to find.
+	reverse_proxy web:3000 {
+		header_up X-Real-IP {remote_host}
+	}
+}

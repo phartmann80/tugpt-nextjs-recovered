@@ -72,9 +72,10 @@ services:
     restart: unless-stopped
     env_file:
       - /etc/tugpt/web.env
-    # Bind to loopback only; an external reverse proxy (nginx/Caddy, not
-    # part of this repo) terminates TLS on 80/443 and forwards to 3001.
-    # No container here should bind 0.0.0.0:80 or 0.0.0.0:443 directly.
+    # Bind to loopback only. Nothing reaches this from outside the host
+    # unless the `caddy` service below is enabled, and even then Caddy
+    # talks to it over the compose network (web:3000), not this port —
+    # 3001 stays a local debugging convenience.
     ports:
       - "127.0.0.1:3001:3000"
     networks:
@@ -85,6 +86,41 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  # TLS termination and public routing. OFF by default: the `proxy` profile
+  # means `docker compose up -d web` neither starts it nor can start it by
+  # accident. Enable deliberately with
+  #   docker compose -p tugpt --profile proxy up -d caddy
+  # once TUGPT_DOMAIN is set in /etc/tugpt/web.env and its DNS A/AAAA record
+  # points at this host. See docs/production_environment.md section 5.4b.
+  #
+  # Without this, the dashboard is reachable on the server (127.0.0.1:3001) and
+  # nowhere else, which is the state section 5.4a leaves behind.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["proxy"]
+    restart: unless-stopped
+    # TUGPT_DOMAIN is read from here by the Caddyfile. Using env_file rather
+    # than Compose interpolation on purpose: an interpolated ${VAR} is resolved
+    # when the file is parsed, so it would be required by every compose command
+    # even with the profile off.
+    env_file:
+      - /etc/tugpt/web.env
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # caddy_data holds the issued certificates and the ACME account key.
+      # Losing it means re-issuing on every restart, which will hit Let's
+      # Encrypt rate limits. It must stay a named volume.
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - tugpt
+    depends_on:
+      - web
 
   whatsapp-worker:
     build:
@@ -129,3 +165,9 @@ services:
 networks:
   tugpt:
     driver: bridge
+
+volumes:
+  # Issued certificates and the ACME account key. Only used by the `proxy`
+  # profile; declaring them here is inert otherwise.
+  caddy_data:
+  caddy_config:
