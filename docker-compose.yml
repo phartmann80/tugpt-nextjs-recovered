@@ -106,6 +106,25 @@ services:
     # even with the profile off.
     env_file:
       - /etc/tugpt/web.env
+    # Explicit resolvers, so this container does not depend on the host's
+    # /etc/resolv.conf.
+    #
+    # Docker copies that file into containers. On a systemd-resolved host it
+    # can contain only 127.0.0.53 — the stub listener, which lives in the
+    # host's network namespace and is unreachable from inside a container.
+    # Docker usually detects the stub and substitutes public resolvers; on
+    # 2026-08-24 it did not, and the first ACME challenge failed with no DNS
+    # at all. It was fixed on the host by repointing /etc/resolv.conf at
+    # /run/systemd/resolve/resolv.conf, which works and is one symlink away
+    # from silently reverting.
+    #
+    # The consequence of reverting is invisible for weeks: the existing
+    # certificate keeps serving while every renewal attempt fails, and the
+    # site goes down at expiry. Pinning resolvers here removes the dependency
+    # entirely. deploy/caddy/check-cert.sh is the belt to this braces.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     ports:
       - "80:80"
       - "443:443"

@@ -49,7 +49,11 @@ const ROUTES: RouteExpectation[] = [
     path: '/',
     kind: 'page',
     type: 'public',
-    why: 'Landing page. Renders no tenant data.',
+    // This reason used to read "Landing page. Renders no tenant data." True,
+    // and useless: `/` was create-next-app boilerplate the entire time, and a
+    // reason written about tenant data could never catch that. It now
+    // redirects to the inbox and renders nothing at all.
+    why: 'Redirects to /dashboard/drafts. Renders nothing and reads nothing; the proxy gates the destination.',
   },
   {
     path: '/auth/login',
