@@ -70,6 +70,28 @@ jobs:
       - name: Run pgTAP suite
         run: supabase test db --local
 
+  # deploy/check-host.sh is the executable form of the 5.2 pre-deploy security
+  # checklist, written after the 2026-08-24 compromise: the prose version had
+  # "password auth is disabled" as its first item and nothing ever confirmed it.
+  # A checker nobody tests is that same failure one level up, so the fixtures in
+  # check-host.test.sh run here — including a fixture of the exact host state the
+  # box was lost with, and one asserting the caddy service still pins its own
+  # resolvers in docker-compose.yml.
+  #
+  # These are POSIX sh scripts with no dependencies; shellcheck ships on the
+  # ubuntu-latest runner. Nothing here touches a server.
+  deploy-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Shellcheck
+        run: shellcheck -s sh deploy/check-host.sh deploy/check-host.test.sh deploy/caddy/check-cert.sh
+
+      - name: Run host-check fixtures
+        run: sh deploy/check-host.test.sh
+
   docker-build:
     runs-on: ubuntu-latest
     steps:
