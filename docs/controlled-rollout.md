@@ -31,13 +31,39 @@ rather than assuming it.
 - [ ] Migrations applied and the harness preflight passes — `docs/server-migrations.md` §4.
 - [ ] Both workers active on the deployed commit:
       `systemctl is-active tugpt-draft-worker tugpt-whatsapp-worker`
-- [ ] `LANGDOCK_API_CODE` and `LANGDOCK_MODEL` present in `/etc/tugpt/worker.env`
-      (`docs/milestone1-e2e-runbook.md` §6a).
+- [ ] `LANGDOCK_API_CODE` present in `/etc/tugpt/worker.env`
+      (`docs/milestone1-e2e-runbook.md` §6a). Model selection is `LANGDOCK_MODELS` — the ordered
+      rotation list, and the recommended setting. `LANGDOCK_MODEL` pins a single model and disables
+      rotation; it is the escape hatch, and it is ignored when `LANGDOCK_MODELS` is also set.
+      Neither is required: unset, the worker rotates the whole allowlist. See ADR-006. Do not
+      assume which is configured — the worker resolves it at boot and says so:
+      `journalctl -u tugpt-draft-worker -n 50 --no-pager | grep 'model order resolved'`.
 - [ ] Each pilot organization has a **live quota period** — a `draft_quota_limits` row whose
-      `period_start <= CURRENT_DATE < period_end`. Without one, every job is skipped with
-      `NO_ACTIVE_QUOTA_PERIOD` and the rollout looks broken when it is merely unbudgeted.
-- [ ] Each pilot organization has an `ai_draft_configs` row. Without it the prompt has no business
-      instructions and the drafts are generic.
+      `period_start <= CURRENT_DATE < period_end`. Without one, every job is skipped.
+      **It lands in the database as `skip_reason = 'QUOTA_DENIED'`,** not as
+      `NO_ACTIVE_QUOTA_PERIOD` — that is a `reason` returned by `private.reserve_draft_usage`
+      which the worker logs and does not persist. Looking for it in `draft_generation_jobs` finds
+      nothing and reads like the quota check never ran.
+- [ ] Each pilot organization has an `ai_draft_configs` row, and it points at that organization's
+      business profile. The worker looks the config up by `(business_profile_id, organization_id)`
+      and takes the job's `business_profile_id` from the job row, so a config that exists but
+      references a different profile id is the same as no config at all.
+      (`business_profiles` is `UNIQUE (organization_id)` — one profile per organization — so this
+      is a stale-id risk, not a which-of-several risk.)
+
+      This is not a quality nicety: a missing or mismatched row **dead-letters the job** with
+      `DRAFT_INVALID_CONFIG`. It is the most likely way a first pilot produces zero drafts while
+      nothing looks misconfigured. Prove it rather than assuming it:
+
+      ```sql
+      -- The pilot org's profile, and whether a draft config resolves for it.
+      -- Expect exactly one row with config_id NOT NULL.
+      SELECT bp.id AS business_profile_id, bp.display_name, c.id AS config_id
+      FROM public.business_profiles bp
+      LEFT JOIN public.ai_draft_configs c
+        ON c.business_profile_id = bp.id AND c.organization_id = bp.organization_id
+      WHERE bp.organization_id = '<ORG_UUID>';
+      ```
 - [ ] You know who is watching, and for how long. Step 4 is not optional.
 
 Run every statement below against the database with a service-role or owner connection. Take the
@@ -110,15 +136,39 @@ GROUP BY 1, 2, 3
 ORDER BY 4 DESC;
 ```
 
+This table is the complete set of terminal outcomes — every value the worker can
+write to `skip_reason` or `error_code`, with nothing omitted.
+`apps/worker/tests/controlled-rollout-doc.test.ts` asserts that: it reads the rows
+between the markers below and fails if they do not match `DRAFT_SKIP_REASONS` and
+`APPROVED_ARCHIVE_ERROR_CODES` in the worker source, exactly, in both directions.
+A code added to the worker without a row here turns CI red, and so does a row here
+naming a value the worker cannot produce — which is how the `NO_ACTIVE_QUOTA_PERIOD`
+that used to be in this document survived as long as it did.
+
+<!-- outcome-table:start -->
+
 | What you see | What it means | Do |
 |---|---|---|
 | `completed`, no error | working | continue |
 | `skipped` / `FEATURE_DISABLED` | the AND did not resolve true — usually the global row | re-check §3 |
-| `skipped` / quota reason | no live quota period, or the ceiling is hit | fix the quota, not the flag |
-| `dead_lettered` / `DRAFT_INVALID_REQUEST` | the provider rejected the request | read `failed_jobs.provider_error_detail`; it quotes the provider |
-| `dead_lettered` / `DRAFT_PROVIDER_CONFIG_ERROR` | `LANGDOCK_API_CODE` missing or `LANGDOCK_MODEL` off the allowlist | fix the env file, restart the worker |
+| `skipped` / `QUOTA_DENIED` | no live quota period, or the ceiling is hit. The *only* skip reason a quota denial produces, whatever the underlying cause | fix the quota, not the flag; §5 "Cost and quota" tells you which |
+| `dead_lettered` / `DRAFT_INVALID_CONFIG` | no `ai_draft_configs` row resolves for this job's `(business_profile_id, organization_id)` | run the §2 config query; this is a hard failure, not degraded output |
+| `dead_lettered` / `DRAFT_INVALID_REQUEST` | the job row, or its source message, could not be loaded; or the provider rejected the request as malformed | read `failed_jobs.provider_error_detail`; it quotes the provider |
+| `dead_lettered` / `DRAFT_PROVIDER_CONFIG_ERROR` | `LANGDOCK_API_CODE` is **missing**, or the configured models are not on the allowlist — the worker could not construct a provider at all | fix the env file, restart the worker |
+| `dead_lettered` / `DRAFT_PROVIDER_AUTH_ERROR` | Langdock **rejected** the credential (401/403). Distinct from the row above: the key is present and wrong, not absent | rotate or correct `LANGDOCK_API_CODE`, restart the worker |
 | `dead_lettered` / `DRAFT_EXHAUSTED_RETRIES` | three genuinely transient failures | Langdock is degraded; single-provider means no fallback (ADR-006) |
+| `dead_lettered` / `DRAFT_MALFORMED_RESPONSE` | the provider answered, but not in a shape the orchestrator could parse | `provider_error_detail`; if it repeats, the model or endpoint changed under us |
+| `dead_lettered` / `DRAFT_PROVIDER_EMPTY_OUTPUT` | the provider returned success with no text | usually a content filter or a degenerate prompt; check `ai_draft_configs` |
+| `dead_lettered` / `DRAFT_PROVIDER_OUTPUT_TOO_LONG` | the draft exceeded `ai_draft_configs.max_draft_length` | raise the limit or tighten `response_rules` |
+| `dead_lettered` / `DRAFT_INTERNAL_ERROR` | an unclassified failure inside the worker | `journalctl -u tugpt-draft-worker`; this one is a bug until proven otherwise |
 | Anything at all in a **different** organization | isolation failure | **disarm now** (§6) |
+
+<!-- outcome-table:end -->
+
+`DRAFT_PROVIDER_ERROR`, `DRAFT_GENERATION_TIMEOUT` and `DRAFT_QUOTA_EXCEEDED` also
+pass the `failed_jobs` CHECK constraint, but no code path produces them. They are
+legacy allowlist entries. Seeing one means something other than this worker wrote
+the row.
 
 **Dead letters, with the provider's own words:**
 
