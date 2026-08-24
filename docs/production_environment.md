@@ -111,16 +111,82 @@ This is the state section 5.4a produces, and the one to deploy today. `tugpt.ser
 
 `worker.env` already exists on this server and can be reused as-is for the containerized workers — same variable names, same file. `web.env` is new (the web app has never been deployed to this server before) and, in addition to the server secrets, needs `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` available as Docker build args (see 5.3), because Next.js inlines `NEXT_PUBLIC_*` values into the client bundle at build time, not at container start.
 
-### 5.2 Pre-deploy security checklist
+### 5.2 Pre-deploy security check
 
-Confirm each of these against the actual state of `212.227.44.13` before proceeding. If confirming any of them requires access this session doesn't have, that needs to be granted (or the check run by whoever already has access) before cutover:
+**Run `deploy/check-host.sh`. Do not tick boxes by hand.**
+
+```bash
+cd /opt/tugpt
+sudo sh deploy/check-host.sh
+```
+
+Exit 0 means nothing failed. Exit 1 means at least one check failed, and the run
+printed what it found and what to do about it. Nothing in the script changes
+anything on the host.
+
+This section used to be the checkbox list now preserved at the bottom, and
+nothing else. Its first item was "SSH key-based auth is enabled and password
+auth is disabled." On 2026-08-24 the server was compromised with root password
+SSH still enabled and had to be reinstalled from scratch. The box was never
+confirmed against that list, and nothing anywhere recorded that it hadn't been.
+A checklist only works if somebody reads it and answers it honestly; a script
+that exits non-zero works whether or not anybody does either.
+
+Run it:
+
+- on a fresh box **before** anything is deployed — it is built for a half-built
+  machine and reports what does not exist yet as `skip`, never as a pass;
+- again after 5.4a and 5.4b, when the container and the proxy exist and the
+  checks that were skipped can actually run;
+- periodically after that. The run prints `skip is not a pass` for a reason.
+
+Every check runs even when an earlier one fails, so one run gives the whole
+picture rather than one problem at a time.
+
+| check | fails when |
+| --- | --- |
+| `ssh.password` | `PasswordAuthentication yes`. The 2026-08-24 entry point. |
+| `ssh.root` | `PermitRootLogin yes` — root reachable over the network. |
+| `ssh.kbdinteractive` | `KbdInteractiveAuthentication yes`. With PAM this is a second door to the same password even when `PasswordAuthentication` is `no`, which is why disabling one setting is not enough. |
+| `firewall` | `ufw` is installed but inactive. Warns on any port open beyond 22/80/443. |
+| `listeners` | anything is bound to a wildcard address outside 22/80/443. |
+| `docker.ports` | a container publishes to `0.0.0.0`/`[::]` outside 80/443. Docker writes its own iptables rules and can publish a port past `ufw`. |
+| `webservers` | `nginx`, `apache2`, `httpd`, `lighttpd` or `caddy` is active on the host, competing with the Caddy container for 80/443. |
+| `units` | `tugpt.service` is enabled alongside `tugpt-web.service` or the native workers — the double-consume trap of 5.4. |
+| `env.web.env`, `env.worker.env` | `/etc/tugpt/*.env` is not `600 root:root`. |
+| `dns.host` | warns when `/etc/resolv.conf` lists only loopback resolvers (the systemd-resolved stub). |
+| `dns.pinned` | the `dns:` pin has been removed from the `caddy` service in `docker-compose.yml`. |
+| `dns.acme` | the running Caddy container cannot resolve Let's Encrypt — the silent renewal failure described in 5.4b. |
+
+Run it as root. `sshd -T` is the only authoritative source for the SSH settings:
+it resolves `Include` directives and `/etc/ssh/sshd_config.d/` drop-ins, and a
+cloud image re-enabling password auth in a drop-in underneath a correct-looking
+`sshd_config` is the most likely shape of what happened here. Without root the
+script falls back to reading the config text and says so, rather than reporting
+a pass it cannot justify.
+
+`deploy/check-host.test.sh` tests the checker against recorded fixtures — case 1
+reproduces the machine that was lost, case 3 a half-built box, case 5 the
+degraded non-root path. It runs in CI as the `deploy-scripts` job, alongside
+`shellcheck`. An unchecked checker is the same failure one level up.
+
+Ongoing, `deploy/caddy/check-cert.sh` covers certificate expiry and container
+DNS on a schedule; see 5.4b.
+
+<details>
+<summary>The original prose checklist, superseded by the script above</summary>
+
+Every item below is now one of the checks in the table. It is kept for the
+record, and because it is the artifact the post-mortem is about.
 
 - [ ] SSH key-based auth is enabled and password auth is disabled (`PasswordAuthentication no` in `sshd_config`).
 - [ ] `ufw` (or equivalent) allows only 22 (SSH), 80, and 443 inbound; no other ports reachable from the public internet.
 - [ ] No application port (`3001` for `web`, or any worker) is bound to `0.0.0.0` — loopback-only, confirmed with `ss -tlnp` after the stack is up. (80 and 443 are bound publicly by the `proxy` profile when it is enabled, 5.4b — that is the one intended exception.)
 - [ ] Docker itself isn't punching holes through `ufw` (Docker's default iptables behavior can bypass ufw rules for published ports) — verify with `iptables -L DOCKER-USER` or by testing from outside the host that `3001` is unreachable externally.
 
-**Ports and services this host has already been observed to conflict with.** All of these were hit on the 2026-08-24 deployment; none is hypothetical.
+</details>
+
+**Ports and services this host has already been observed to conflict with.** All of these were hit on the 2026-08-24 deployment; none is hypothetical. `check-host.sh` covers all four — the commands are here so you can see what it is looking at, and to run by hand when diagnosing a failure it reports.
 
 ```bash
 ss -tlnp | grep -E ':(80|443|3000|3001)\b'   # what already holds the ports
@@ -135,10 +201,17 @@ systemctl is-enabled tugpt-web               # an older native build on 3000
 
 ### 5.3 First-time setup
 
+Run the 5.2 check twice: once as soon as the repo is on the box, before any of
+this — it is designed for a machine where nothing exists yet and will tell you
+what it cannot see rather than failing — and again at the end of 5.4b, when the
+container and the proxy exist and the checks it skipped can run for real.
+
 ```bash
 # as a user with docker access
 git clone <repo> /opt/tugpt   # or: cd /opt/tugpt && git pull, if already checked out
 cd /opt/tugpt
+
+sudo sh deploy/check-host.sh   # 5.2. Fix anything it FAILs before continuing.
 
 mkdir -p /etc/tugpt
 chmod 700 /etc/tugpt
