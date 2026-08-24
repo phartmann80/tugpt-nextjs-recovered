@@ -60,6 +60,31 @@ export type DraftErrorCode =
   | 'DRAFT_INTERNAL_ERROR';
 
 /**
+ * The only values the worker ever writes to `draft_generation_jobs.skip_reason`.
+ *
+ * A skip is not a failure: the job terminated because it was not supposed to
+ * run, not because something broke. That distinction is the reason these are a
+ * separate list from the archive error codes above rather than more entries in
+ * it.
+ *
+ * `skip_reason` is an unconstrained TEXT column - there is no CHECK behind it -
+ * so before this type existed the set was enforced by nothing at all, and
+ * `skipJob` took a bare `string`. docs/controlled-rollout.md's outcome table
+ * tells an operator which values to expect, and
+ * apps/worker/tests/controlled-rollout-doc.test.ts asserts that table lists
+ * exactly these and exactly the codes in APPROVED_ARCHIVE_ERROR_CODES.
+ *
+ * Note what is NOT here: `NO_ACTIVE_QUOTA_PERIOD`. That is a `reason` returned
+ * by `private.reserve_draft_usage` and it is logged, never persisted - every
+ * quota denial reaches the database as `QUOTA_DENIED`. The rollout doc claimed
+ * otherwise until 2026-08-24, which would have sent an operator looking for a
+ * value the database never contains.
+ */
+export const DRAFT_SKIP_REASONS = ['FEATURE_DISABLED', 'QUOTA_DENIED'] as const;
+
+export type DraftSkipReason = (typeof DRAFT_SKIP_REASONS)[number];
+
+/**
  * Categories classified as transient (fallback-eligible).
  * These retry via PGMQ visibility timeout and are never archived
  * until the third attempt exhausts retries.
