@@ -19,7 +19,7 @@ Every production environment deployment requires the following variables to be e
 | `LANGDOCK_MODEL` | Pins exactly one model and disables rotation. Kept for deployments predating rotation, and as the escape hatch. Ignored when `LANGDOCK_MODELS` is also set — the more specific variable wins, and the override is logged at boot. Allowed values: `gpt-5-mini`, `gpt-5.1`, `gpt-5.2`, `gpt-5`. Anything else is rejected at worker boot. | Server-side only. Not a secret. |
 | `GATEWAY_API_MASTRA_KEY` | Production Mastra Orchestrator API Key | **SECRET**. Server-side only. |
 | `GATEWAY_API_URL` | Production Mastra Endpoint URL | Server-side only. |
-| `TUGPT_DOMAIN` | Public hostname the dashboard is served on, e.g. `dashboard.tugpt.ai`. Read by the Caddy reverse proxy only (section 5.4b), and only when the `proxy` compose profile is enabled. Not needed for the loopback-only deployment in 5.4a. | Not a secret. |
+| `TUGPT_DOMAIN` | Public hostname the dashboard is served on, e.g. `tugpt.ai`. Read by the Caddy reverse proxy only (section 5.4b), and only when the `proxy` compose profile is enabled. Not needed for the loopback-only deployment in 5.4a. | Not a secret. |
 
 **Removed as of 2026-08-18 (see ADR-006):** `LOGICC_API_KEY`, `LOGICC_ENDPOINT_URL`, `LOGICC_DEFAULT_MODEL`, `ANYMIZE_API_KEY`, `ANYMIZE_ENDPOINT_URL`, `ANYMIZE_DEFAULT_MODEL`, and `MODEL` are no longer read anywhere in the codebase. Logicc was cut for cost; Anymize was removed to avoid cross-project coupling (it remains in use on other projects). Do not add these back without a separate, explicit decision.
 
@@ -100,6 +100,7 @@ Interim (as of 2026-08-20 — web on Docker, workers still native):
   docker-compose.yml
   apps/web/Dockerfile
   deploy/caddy/Caddyfile           # only used when the `proxy` profile is enabled (5.4b)
+  deploy/caddy/check-cert.sh       # TLS renewal check (5.4b)
 /etc/systemd/system/
   tugpt-web.service                # (new) runs ONLY the compose `web` service
   tugpt-whatsapp-worker.service    # unchanged, still enabled and running
@@ -118,6 +119,19 @@ Confirm each of these against the actual state of `212.227.44.13` before proceed
 - [ ] `ufw` (or equivalent) allows only 22 (SSH), 80, and 443 inbound; no other ports reachable from the public internet.
 - [ ] No application port (`3001` for `web`, or any worker) is bound to `0.0.0.0` — loopback-only, confirmed with `ss -tlnp` after the stack is up. (80 and 443 are bound publicly by the `proxy` profile when it is enabled, 5.4b — that is the one intended exception.)
 - [ ] Docker itself isn't punching holes through `ufw` (Docker's default iptables behavior can bypass ufw rules for published ports) — verify with `iptables -L DOCKER-USER` or by testing from outside the host that `3001` is unreachable externally.
+
+**Ports and services this host has already been observed to conflict with.** All of these were hit on the 2026-08-24 deployment; none is hypothetical.
+
+```bash
+ss -tlnp | grep -E ':(80|443|3000|3001)\b'   # what already holds the ports
+systemctl is-active nginx apache2            # a web server with no vhosts still binds 80/443
+docker ps --format '{{.Names}}\t{{.Ports}}'  # an unrelated container on 3001
+systemctl is-enabled tugpt-web               # an older native build on 3000
+```
+
+- **3001** was held by an unrelated `open-webui` container.
+- **80/443** were held by an `nginx` with no configured vhosts. It has to be stopped *and disabled*, or it takes the ports back on the next boot and Caddy fails to bind.
+- **3000** was held by a stale `tugpt-web.service` from an earlier native build. Once the compose container is the deployment, that unit must be stopped and disabled, or two web servers compete for the same role and which one answers depends on boot order.
 
 ### 5.3 First-time setup
 
@@ -228,7 +242,9 @@ docker compose -p tugpt logs --tail=50 web
 
 5.4a leaves the app listening on loopback. A reviewer cannot open it. This adds TLS termination and public routing in front of it.
 
-Caddy rather than nginx: certificates are obtained and renewed from Let's Encrypt automatically, with no certbot, no cron entry, and no renewal that can quietly stop working. The whole configuration is `deploy/caddy/Caddyfile`, about twenty lines.
+Caddy rather than nginx: certificates are obtained and renewed from Let's Encrypt automatically, with no certbot and no cron entry to forget. The whole configuration is `deploy/caddy/Caddyfile`, about twenty lines.
+
+This section originally added "and no renewal that can quietly stop working." That was wrong, and the 2026-08-24 deployment showed how — renewal can fail silently for reasons outside Caddy, DNS being the one we hit. See the DNS note below and `deploy/caddy/check-cert.sh`.
 
 **It is off by default.** The compose service carries `profiles: ["proxy"]`, so `docker compose up -d web` neither starts it nor can start it by accident, and `tugpt-web.service` is unaffected.
 
@@ -252,9 +268,55 @@ curl -fsSI http://$TUGPT_DOMAIN/api/v1/health         # 308 redirect to https
 curl -fsS  https://$TUGPT_DOMAIN/api/v1/health        # {"status":"ok",...}
 ```
 
-Then open `https://<TUGPT_DOMAIN>/auth/login` and sign in.
-
 **To stop it** without touching the app: `docker compose -p tugpt --profile proxy stop caddy`. The web container keeps serving on loopback.
+
+#### The URL to give a reviewer
+
+**`https://<TUGPT_DOMAIN>/`** — that is the whole answer, and it works whether or not they are signed in.
+
+`/` redirects to `/dashboard/drafts`. That is a protected route, so the proxy sends a signed-out visitor to `/auth/login?redirect=/dashboard/drafts`, and the login page returns them to the inbox once they authenticate. A signed-in reviewer goes straight there.
+
+The routes behind it, for debugging:
+
+| Path | |
+|---|---|
+| `/` | redirect to the inbox — no page of its own |
+| `/dashboard/drafts` | the reviewer inbox, the actual destination |
+| `/dashboard/drafts/[draftId]` | one draft: revisions, review history, approve / edit / reject |
+| `/auth/login` | email + password; honours `?redirect=` |
+| `/api/v1/health` | liveness, unauthenticated by design |
+
+Until 2026-08-24 `/` was the untouched `create-next-app` boilerplate — Next.js logo, "To get started, edit the page.tsx file", and a "Deploy Now" button linking to Vercel. Nothing linked to it and the app had never been served from a domain anyone would type by hand, so nobody had looked. It was the first thing a visitor to tugpt.ai saw.
+
+#### DNS inside the container, and why a renewal can fail silently
+
+Docker copies the host's `/etc/resolv.conf` into containers. On a systemd-resolved host that file can contain only `127.0.0.53` — the stub listener, which lives in the host's network namespace and is unreachable from inside a container. Docker usually detects the stub and substitutes public resolvers. On 2026-08-24 it did not, and the first ACME challenge failed with no DNS at all.
+
+That was fixed on the host by repointing `/etc/resolv.conf` at `/run/systemd/resolve/resolv.conf`, which works and is one symlink away from silently reverting. **The compose file now pins explicit resolvers on the `caddy` service**, so the container does not depend on the host file at all.
+
+This matters more than it looks. Caddy renews at roughly two-thirds of the certificate lifetime — about 30 days out on a 90-day Let's Encrypt certificate. If DNS is broken, the existing certificate keeps serving perfectly while every renewal attempt fails, and the first symptom is the site going down at expiry, weeks later, with nothing in between.
+
+`deploy/caddy/check-cert.sh` is the second line of defence. It resolves the ACME host from inside the container and checks how many days the served certificate has left, failing under three weeks — by which point renewal has already been failing for a week or more:
+
+```bash
+cd /opt/tugpt
+set -a; . /etc/tugpt/web.env; set +a
+sh deploy/caddy/check-cert.sh
+# ok    dns   caddy resolves acme-v02.api.letsencrypt.org
+# ok    cert  tugpt.ai valid for 89d
+```
+
+Invoked as `sh <path>` rather than `./<path>` because the file arrives through the GitHub API, which writes blobs as `0644` — the executable bit does not survive a fresh clone.
+
+Optional, as root, to be told rather than to remember:
+
+```cron
+0 7 * * 1 cd /opt/tugpt && set -a && . /etc/tugpt/web.env && set +a && \
+  sh deploy/caddy/check-cert.sh || \
+  logger -t tugpt-cert -p daemon.err "TLS check failed on tugpt.ai"
+```
+
+Weekly gives roughly four warnings between the first failed renewal and an outage.
 
 **A correction to what 5.4a used to say.** It claimed Supabase Auth would need the new origin in its redirect allowlist before anyone could log in. That is wrong for the flow this app actually uses: `apps/web/src/app/auth/login/page.tsx` calls `supabase.auth.signInWithPassword`, a direct API call from the browser that involves no redirect URL at all. **Email/password sign-in works as soon as the proxy is up, with no Supabase configuration change.**
 
