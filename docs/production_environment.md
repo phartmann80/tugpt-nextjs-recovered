@@ -19,6 +19,7 @@ Every production environment deployment requires the following variables to be e
 | `LANGDOCK_MODEL` | Pins exactly one model and disables rotation. Kept for deployments predating rotation, and as the escape hatch. Ignored when `LANGDOCK_MODELS` is also set — the more specific variable wins, and the override is logged at boot. Allowed values: `gpt-5-mini`, `gpt-5.1`, `gpt-5.2`, `gpt-5`. Anything else is rejected at worker boot. | Server-side only. Not a secret. |
 | `GATEWAY_API_MASTRA_KEY` | Production Mastra Orchestrator API Key | **SECRET**. Server-side only. |
 | `GATEWAY_API_URL` | Production Mastra Endpoint URL | Server-side only. |
+| `TUGPT_DOMAIN` | Public hostname the dashboard is served on, e.g. `dashboard.tugpt.ai`. Read by the Caddy reverse proxy only (section 5.4b), and only when the `proxy` compose profile is enabled. Not needed for the loopback-only deployment in 5.4a. | Not a secret. |
 
 **Removed as of 2026-08-18 (see ADR-006):** `LOGICC_API_KEY`, `LOGICC_ENDPOINT_URL`, `LOGICC_DEFAULT_MODEL`, `ANYMIZE_API_KEY`, `ANYMIZE_ENDPOINT_URL`, `ANYMIZE_DEFAULT_MODEL`, and `MODEL` are no longer read anywhere in the codebase. Logicc was cut for cost; Anymize was removed to avoid cross-project coupling (it remains in use on other projects). Do not add these back without a separate, explicit decision.
 
@@ -60,7 +61,7 @@ See ADR-013 for the decision record. This section is the operational runbook.
 
 TuGPT runs on its own dedicated VPS at **`212.227.44.13`** — not a shared host, not Vercel. Vercel is no longer used at all; the deployment model is push to GitHub, deploy to this server. This is the same server that already runs `tugpt-whatsapp-worker` and `tugpt-draft-worker` as systemd-native Node processes today.
 
-**Read 5.4a before 5.4.** As of 2026-08-20 only the **web app** has been authorized to move onto Docker; the workers stay systemd-native and untouched. 5.4a is that deployment. 5.4 below is the *worker* cutover — a separate, later change that retires the native units in one sequence rather than running both side by side, and that must not be started early.
+**Read 5.4a before 5.4.** As of 2026-08-20 only the **web app** has been authorized to move onto Docker; the workers stay systemd-native and untouched. 5.4a is that deployment, and 5.4b makes it reachable from a browser. 5.4 below is the *worker* cutover — a separate, later change that retires the native units in one sequence rather than running both side by side, and that must not be started early.
 
 ### 5.1 Server layout
 
@@ -95,6 +96,10 @@ Target (after cutover):
 Interim (as of 2026-08-20 — web on Docker, workers still native):
 
 ```
+/opt/tugpt/
+  docker-compose.yml
+  apps/web/Dockerfile
+  deploy/caddy/Caddyfile           # only used when the `proxy` profile is enabled (5.4b)
 /etc/systemd/system/
   tugpt-web.service                # (new) runs ONLY the compose `web` service
   tugpt-whatsapp-worker.service    # unchanged, still enabled and running
@@ -111,7 +116,7 @@ Confirm each of these against the actual state of `212.227.44.13` before proceed
 
 - [ ] SSH key-based auth is enabled and password auth is disabled (`PasswordAuthentication no` in `sshd_config`).
 - [ ] `ufw` (or equivalent) allows only 22 (SSH), 80, and 443 inbound; no other ports reachable from the public internet.
-- [ ] No application port (`3001` for `web`, or any worker) is bound to `0.0.0.0` — loopback-only, confirmed with `ss -tlnp` after the stack is up.
+- [ ] No application port (`3001` for `web`, or any worker) is bound to `0.0.0.0` — loopback-only, confirmed with `ss -tlnp` after the stack is up. (80 and 443 are bound publicly by the `proxy` profile when it is enabled, 5.4b — that is the one intended exception.)
 - [ ] Docker itself isn't punching holes through `ufw` (Docker's default iptables behavior can bypass ufw rules for published ports) — verify with `iptables -L DOCKER-USER` or by testing from outside the host that `3001` is unreachable externally.
 
 ### 5.3 First-time setup
@@ -216,8 +221,49 @@ docker compose -p tugpt logs --tail=50 web
 
 **Two things this does not do, both deliberate:**
 
-- **No public reachability.** The container binds `127.0.0.1:3001` only, and this repo contains no reverse proxy — nginx/Caddy and TLS termination are out of scope here (5.1). Until one is configured, the dashboard is reachable *on* the server and not from a browser elsewhere. Once it is, Supabase Auth also needs the new origin added to its redirect allowlist and `site_url`, which is Supabase configuration, not a repo change.
+- **No public reachability.** The container binds `127.0.0.1:3001` only. The dashboard is reachable *on* the server and from nowhere else. Section 5.4b closes that gap and is a separate, opt-in step.
 - **No feature flags move.** `ai_draft_generation` and `whatsapp_integration` stay disabled. This section is about where the app runs.
+
+### 5.4b Making the dashboard reachable from a browser (optional, opt-in)
+
+5.4a leaves the app listening on loopback. A reviewer cannot open it. This adds TLS termination and public routing in front of it.
+
+Caddy rather than nginx: certificates are obtained and renewed from Let's Encrypt automatically, with no certbot, no cron entry, and no renewal that can quietly stop working. The whole configuration is `deploy/caddy/Caddyfile`, about twenty lines.
+
+**It is off by default.** The compose service carries `profiles: ["proxy"]`, so `docker compose up -d web` neither starts it nor can start it by accident, and `tugpt-web.service` is unaffected.
+
+**Before enabling:**
+
+- [ ] A DNS `A` record (and `AAAA` if the host has IPv6) for the intended hostname points at `212.227.44.13`. Caddy proves control of the name to Let's Encrypt; without working DNS it cannot get a certificate.
+- [ ] `TUGPT_DOMAIN=<that hostname>` is in `/etc/tugpt/web.env`. If it is missing, Caddy starts and then fails to obtain a certificate for `TUGPT_DOMAIN-is-not-set.invalid` — the name is chosen so the log line names the problem.
+- [ ] `ufw` allows 80 and 443 inbound (5.2 already assumes this). Both are needed: 80 for the ACME challenge and for the HTTP→HTTPS redirect.
+
+```bash
+cd /opt/tugpt
+docker compose -p tugpt --profile proxy up -d caddy
+```
+
+**Verify:**
+
+```bash
+docker compose -p tugpt --profile proxy ps            # web + caddy
+docker compose -p tugpt logs --tail=50 caddy          # watch the certificate get issued
+curl -fsSI http://$TUGPT_DOMAIN/api/v1/health         # 308 redirect to https
+curl -fsS  https://$TUGPT_DOMAIN/api/v1/health        # {"status":"ok",...}
+```
+
+Then open `https://<TUGPT_DOMAIN>/auth/login` and sign in.
+
+**To stop it** without touching the app: `docker compose -p tugpt --profile proxy stop caddy`. The web container keeps serving on loopback.
+
+**A correction to what 5.4a used to say.** It claimed Supabase Auth would need the new origin in its redirect allowlist before anyone could log in. That is wrong for the flow this app actually uses: `apps/web/src/app/auth/login/page.tsx` calls `supabase.auth.signInWithPassword`, a direct API call from the browser that involves no redirect URL at all. **Email/password sign-in works as soon as the proxy is up, with no Supabase configuration change.**
+
+Where `site_url` and the redirect allowlist *do* matter:
+
+- The `/auth/callback` page, which handles an OAuth code exchange. Nothing routes to it today, but it exists and would need the origin allowlisted before any OAuth provider is switched on.
+- Confirmation and password-recovery emails. `supabase/config.toml` sets `enable_confirmations = true`, so a newly created reviewer receives a confirmation link built from `site_url`. If that still points at the retired Vercel deployment, the link lands nowhere. Worth fixing when reviewer accounts are created — Supabase configuration, not a repo change.
+
+**On the WhatsApp webhook.** Once this is up, `https://<TUGPT_DOMAIN>/api/v1/webhooks/whatsapp` is publicly reachable, which is what Meta will eventually require. It returns 404 today and keeps returning 404 until `whatsapp_integration` is flipped in `packages/feature-flags/src/flags.ts` — a reviewed code change, per ADR-010 amendment 2. Exposing the path does not enable the feature and does not move it closer to enabled.
 
 ### 5.5 Building and deploying a new release (post-cutover)
 
@@ -227,6 +273,8 @@ Until the worker cutover happens, the interim equivalent is two lines — `tugpt
 cd /opt/tugpt && git pull
 systemctl restart tugpt-web
 ```
+
+The proxy does not need restarting for an app release; it is a separate container and routes to whatever `web` is currently serving.
 
 After the worker cutover:
 
