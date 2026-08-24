@@ -19,7 +19,12 @@ import { DraftPgmqAdapter } from './draft-queue-adapter.js';
 import { DraftOrchestrator } from '@tugpt/ai-orchestration';
 import type { DraftRequest, DraftConfig } from '@tugpt/ai-orchestration';
 import type { ProviderErrorCategory } from '@tugpt/ai-providers';
-import { mapProviderErrorToDbCode, isTransientCategory, type DraftErrorCode } from './draft-rpc-error-codes.js';
+import {
+  mapProviderErrorToDbCode,
+  isTransientCategory,
+  type DraftErrorCode,
+  type DraftSkipReason,
+} from './draft-rpc-error-codes.js';
 
 /** Retry visibility delays per Paul's amendment #7. */
 const RETRY_DELAY_1 = 5;   // read_ct = 1 failure → 5 seconds
@@ -553,7 +558,7 @@ export class DraftWorker {
     }
   }
 
-  private async skipJob(jobId: string, msgId: bigint, reason: string): Promise<void> {
+  private async skipJob(jobId: string, msgId: bigint, reason: DraftSkipReason): Promise<void> {
     const { error } = await this.client.rpc('skip_draft_job', {
       p_draft_generation_job_id: jobId,
       p_msg_id: msgId.toString(),
