@@ -216,6 +216,43 @@ export class DraftWorker {
         return;
       }
 
+      // reserve_draft_usage has five outcomes, and two of them mean this job
+      // is already finished:
+      //
+      //   ALREADY_CONSUMED     store_draft ran; a draft exists for this job.
+      //   RESERVATION_RELEASED the job was archived; it is dead-lettered.
+      //
+      // Either way the queue message is stale — it outlived the job. That
+      // happens when store_draft succeeds and queue.deleteJob does not: a
+      // dropped connection does it, and so does SIGKILL at the end of
+      // stop_grace_period, which is what this worker gets on a deploy while a
+      // job is in flight.
+      //
+      // Falling through here used to be unbounded. The provider was called
+      // again (real spend), store_draft then raised P3B10, the catch archived
+      // it, the archive raised P3B12 because the job was already completed,
+      // the DRAFT_INTERNAL_ERROR fallback raised P3B12 as well — the status
+      // check sits above the error-code allowlist — and the message was left
+      // on the queue to be redelivered and do it all again. One provider call
+      // per lap, forever.
+      //
+      // ALREADY_RESERVED deliberately does NOT terminate: that is the ordinary
+      // retry, where a previous attempt reserved quota and failed before
+      // storing anything, and it should generate.
+      if (
+        reservation.status === 'ALREADY_CONSUMED' ||
+        reservation.status === 'RESERVATION_RELEASED'
+      ) {
+        logger.info('Draft job already terminal; discarding stale queue message', {
+          draftGenerationJobId,
+          requestId,
+          reservationStatus: reservation.status,
+          attempt: readCt,
+        });
+        await this.queue.deleteJob(msgId);
+        return;
+      }
+
       // Step 6: Call orchestrator
       const draftRequest: DraftRequest = {
         sourceMessageText: sourceText,
@@ -469,6 +506,22 @@ export class DraftWorker {
       queueMessageId: msgId.toString(),
       attemptedErrorCode: errorCode,
     });
+
+    // P3B12 says the job is already completed or skipped. There is nothing to
+    // archive, and the DRAFT_INTERNAL_ERROR fallback cannot help: the RPC
+    // checks the job status before it checks the error code, so the retry
+    // raises P3B12 too. What is left is a stale queue message, and leaving it
+    // queued means it is redelivered indefinitely — which is the loop this
+    // whole path exists to prevent. Delete it.
+    if (error.code === 'P3B12') {
+      logger.info('Archive refused: job already terminal. Discarding stale queue message', {
+        draftGenerationJobId: jobId,
+        queueMessageId: msgId.toString(),
+        attemptedErrorCode: errorCode,
+      });
+      await this.queue.deleteJob(msgId);
+      return;
+    }
 
     if (errorCode === 'DRAFT_INTERNAL_ERROR') {
       // The guaranteed-accepted code was itself rejected. Nothing further to
