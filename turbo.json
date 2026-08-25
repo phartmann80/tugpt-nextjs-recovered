@@ -1,5 +1,26 @@
 {
   "$schema": "https://turbo.build/schema.json",
+
+  // globalDependencies lists files OUTSIDE any package whose contents a task's
+  // result depends on. Turbo hashes only a package's own directory, so without
+  // this a test that reads a repo-root document keeps a cached pass after the
+  // document changes: `turbo run test` prints FULL TURBO while the test would
+  // fail if it actually ran.
+  //
+  // Two suites read these docs and assert they still match the code —
+  // apps/worker/tests/controlled-rollout-doc.test.ts and
+  // apps/worker/tests/server-migrations-doc.test.ts. CI runs cold so it was
+  // never wrong there, but a local `pnpm test` was, and turning on remote
+  // caching would have made it wrong everywhere.
+  //
+  // The cost is that editing either document invalidates every task in the
+  // monorepo. These files change rarely, and a guard that can report a false
+  // pass is worth less than the cache it saves.
+  "globalDependencies": [
+    "docs/controlled-rollout.md",
+    "docs/server-migrations.md"
+  ],
+
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
