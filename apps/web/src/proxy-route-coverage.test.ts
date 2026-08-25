@@ -1,32 +1,33 @@
 /**
- * classifyRoute() in proxy.ts is an allowlist of protected prefixes with a
- * public fallback:
+ * classifyRoute() in proxy.ts used to be an allowlist of protected prefixes
+ * with a public fallback:
  *
  *   if (/auth ...)        -> 'auth'
  *   if (/dashboard | /settings | /crm | /organizations) -> 'protected'
  *   return 'public'
  *
- * That fails open. A page added at a path nobody remembered to add to the
- * protected list is served by the proxy with no authentication check at all,
- * and nothing about writing that page would reveal it — the failure is
+ * That failed open. A page added at a path nobody remembered to add to the
+ * protected list was served by the proxy with no authentication check at all,
+ * and nothing about writing that page would reveal it — the failure was
  * silence.
  *
- * Nothing in the app is exposed by this today: every page lives under
- * /dashboard or /auth, and every API route authenticates itself. But "nothing
- * is exposed today" is a fact about the current file listing, not a property
- * the code enforces, and it was not written down anywhere.
+ * As of 2026-08-24 it is inverted: anything not explicitly listed as `auth` or
+ * `public` is `protected`. This file was written first, because inverting the
+ * default is only safe once the full public surface is enumerated and each
+ * entry has a recorded reason — and that is what the table below is.
  *
- * These tests turn the fallback into a decision. The route table below must
- * match the app directory exactly, so a new route fails the suite until
- * somebody classifies it on purpose and records why. The last test is the one
- * with teeth: it fails the moment a page outside /auth becomes reachable
- * without an authentication check.
+ * Both halves still earn their place, and they catch opposite mistakes:
  *
- * Deliberately not changed here: classifyRoute itself still fails open.
- * Inverting it to deny-by-default is the stronger fix, but it would make the
- * WhatsApp webhook and the health endpoint redirect to /auth/login unless the
- * public allowlist were exactly right, and that is a change to the SSR
- * authentication path that deserves to be made and verified on its own.
+ *   - Deny-by-default stops an unlisted route from being *exposed*.
+ *   - This table stops a route from being classified *silently*, either way.
+ *     Under deny-by-default a forgotten route is unreachable rather than
+ *     leaked, and unreachable is also a bug — one that now fails here rather
+ *     than in production.
+ *
+ * The route table must match the app directory exactly, so a new route fails
+ * the suite until somebody classifies it on purpose and records why. The last
+ * test is the one with teeth: it fails the moment a page outside /auth becomes
+ * reachable without an authentication check.
  */
 
 import { describe, expect, it } from 'vitest';
