@@ -16,23 +16,37 @@
 #   systemctl restart tugpt       # recreate containers
 #   journalctl -u tugpt -f        # follow compose output
 #
-# See docs/production_environment.md (section 5) for the full runbook,
-# including the expected working directory layout and /etc/tugpt/*.env
-# files this depends on.
+# See docs/production_environment.md for the full runbook, including the
+# expected working directory layout and /etc/tugpt/*.env files this
+# depends on.
 #
-# DO NOT ENABLE THIS UNIT YET (as of 2026-08-20).
+# STATUS: enabled and active in production as of the 2026-08-25 rebuild.
 #
-# It brings up the WHOLE compose file, which includes whatsapp-worker and
-# draft-worker. Those are the same jobs tugpt-whatsapp-worker.service and
-# tugpt-draft-worker.service run natively on the host right now, so enabling
-# this while they are active puts two consumers on each PGMQ queue and
-# double-processes every message. The web app was authorized to move onto the
-# VPS on 2026-08-20; the workers were not.
+# The earlier "DO NOT ENABLE THIS UNIT YET" warning that stood here was
+# about a host that no longer exists. It said this unit must wait for a
+# cutover from tugpt-whatsapp-worker.service and tugpt-draft-worker.service,
+# because two consumers on one PGMQ queue double-process every message.
+# That reasoning is still correct; its premise is not. The host was
+# reinstalled after the 2026-08-24 compromise and no native worker units
+# came back, so there was no cutover to perform and never a moment with two
+# consumers on a queue. This unit went straight to owning the whole stack.
 #
-# To run the web app alone, use deploy/systemd/tugpt-web.service — see section
-# 5.4a of the runbook. This unit is for the worker cutover in section 5.4,
-# which stops and disables the native units in the same sequence. The two units
-# declare Conflicts= on each other so they cannot both be active.
+# tugpt-web.service brings up `web` alone and belongs to the earlier
+# web-only deployment. The two units declare Conflicts= on each other so
+# they cannot both be active — leave it that way.
+#
+# KNOWN GAP: ExecStart below does not pass `--profile proxy`, so this unit
+# does not itself start or manage the Caddy container that terminates TLS.
+# Caddy is running on the box; it is simply outside the thing that claims to
+# own the stack, and `--remove-orphans` makes its fate on restart a question
+# rather than a fact. Settle it non-destructively before the next deploy:
+#
+#   docker compose -p tugpt -f /opt/tugpt/docker-compose.yml \
+#     --dry-run up -d --build --remove-orphans
+#
+# If that plan says it would remove or stop caddy, add `--profile proxy` to
+# both ExecStart and ExecStop here — otherwise every deploy drops TLS until
+# somebody notices.
 
 [Unit]
 Description=TuGPT.ai Docker Compose stack

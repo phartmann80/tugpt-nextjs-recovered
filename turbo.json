@@ -16,9 +16,15 @@
   // The cost is that editing either document invalidates every task in the
   // monorepo. These files change rarely, and a guard that can report a false
   // pass is worth less than the cache it saves.
+  //
+  // docker-compose.yml and the worker Dockerfile are here for the same reason:
+  // apps/worker/tests/worker-start-command.test.ts reads both, and without
+  // this a change to either leaves that suite's cached pass valid.
   "globalDependencies": [
     "docs/controlled-rollout.md",
-    "docs/server-migrations.md"
+    "docs/server-migrations.md",
+    "docker-compose.yml",
+    "apps/worker/Dockerfile"
   ],
 
   "tasks": {
