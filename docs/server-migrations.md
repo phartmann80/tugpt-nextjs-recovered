@@ -139,12 +139,12 @@ pnpm exec supabase db push --linked
 
 ## 3. What to run right now
 
-As of 2026-08-19 the staging database is behind this checkout by:
-
-- `20260819000001_align_archive_error_codes_and_capture_provider_detail.sql`
-  — extended dead-letter allowlist + `failed_jobs.provider_error_detail`
-- `20260819000002_expose_applied_migration_versions.sql`
-  — the read-only migration-ledger RPC the preflight gate uses
+**The dry run is the authority on what is outstanding — not this document.**
+This section used to list the specific migrations the staging database was
+behind by. That list was correct on the day it was written and wrong one commit
+later, when `20260819000003` landed and nobody came back to edit it. A runbook
+that inventories a moving target is a runbook that lies; `--dry-run` reads the
+ledger and cannot go stale.
 
 ```bash
 cd /opt/tugpt
@@ -175,30 +175,75 @@ pnpm --filter @tugpt/worker exec tsx src/e2e/milestone1.ts preflight \
   --env-file /etc/tugpt/worker.env --env-file /etc/tugpt/web.env
 ```
 
-It checks two things, both fatal:
+It checks two things:
 
-1. **Ledger diff.** Every `.sql` file in `supabase/migrations` must have a row
-   in `supabase_migrations.schema_migrations`. This is generic — adding a
-   migration file extends the check automatically, with no code change. The
-   ledger lives in a schema PostgREST does not expose, so it is read through
+1. **Ledger diff** — fatal, *except* that it can be skipped. Every `.sql` file
+   in `supabase/migrations` must have a row in
+   `supabase_migrations.schema_migrations`. This is generic — adding a migration
+   file extends the check automatically, with no code change. The ledger lives
+   in a schema PostgREST does not expose, so it is read through
    `applied_migration_versions()`, a `SECURITY DEFINER` function granted to
    `service_role` only. It returns version and name; never the migration SQL.
-2. **Effect probes.** The specific objects the worker depends on are queried
-   directly, because a ledger row proves a migration was *recorded*, not that
-   it *took effect* — the two diverge after a partially applied migration or a
-   ledger row inserted by hand to unstick a push.
 
-A clean run prints:
+   **The exception matters.** If the harness cannot locate a
+   `supabase/migrations` directory above itself — running from a `dist/` build
+   shipped without `supabase/`, for instance — it prints
+   `[WARN] Could not locate a supabase/migrations directory ... skipping the
+   migration-ledger diff` and carries on. The effect probes still run and are
+   still fatal, but the layer that catches a *missing* migration is gone. On the
+   VPS the harness runs from the checkout, so this does not apply; if you ever
+   see that warning, the ledger was not checked and the run proves less than it
+   appears to.
+2. **Effect probes** — fatal. Specific objects are queried directly, because a
+   ledger row proves a migration was *recorded*, not that it *took effect* — the
+   two diverge after a partially applied migration or a ledger row inserted by
+   hand to unstick a push.
+
+   There are exactly two, and **both belong to `20260819000001`**:
+   `failed_jobs.provider_error_detail` and the four-argument
+   `archive_draft_failed_job` overload. `20260819000002` is proved indirectly —
+   the ledger read itself fails if its RPC is absent. **`20260819000003` has no
+   probe**, so a recorded-but-ineffective apply of it would pass this gate; what
+   it changes is `private.store_draft` writing `provider` and `model` onto the
+   job row, so the symptom would be per-model attribution coming back NULL.
+   Adding that probe is worth doing, and deliberately not being done in the same
+   change as this correction: a new probe that is wrong fails the gate and blocks
+   a rebuild.
+
+The **schema-gate lines** of a clean run — an excerpt, not the whole output.
+Preflight also prints a `=== PREFLIGHT ===` banner, three `[info]` lines about
+the resolved credentials, and `[ok]` lines for the service-role connection, the
+`whatsapp_integration` check, the test organization and `preflight complete`.
+Those are not reproduced here; do not read extra lines as a problem.
+
+<!-- schema-gate-sample:start -->
 
 ```
-  [ok]   all 37 migration(s) in this checkout are applied (database has 37, latest 20260819000002)
+  [ok]   all 38 migration(s) in this checkout are applied (database has 38, latest 20260819000003)
   [ok]   20260819000001: failed_jobs.provider_error_detail column — column is selectable
-  [ok]   20260819000001: archive_draft_failed_job 4-argument overload ... — signature present, returned P3B07 DRAFT_JOB_NOT_FOUND
+  [ok]   20260819000001: archive_draft_failed_job 4-argument overload (extended error-code allowlist) — signature present, returned P3B07 DRAFT_JOB_NOT_FOUND
   [ok]   database schema matches this checkout
 ```
 
-A stale database aborts with `REFUSING TO RUN`, the list of missing
-migrations, what each one's absence breaks, and the command from §1.
+<!-- schema-gate-sample:end -->
+
+The count and the latest version above are real values, and
+`apps/worker/tests/server-migrations-doc.test.ts` asserts they match
+`supabase/migrations` in this checkout. They said 37 and `20260819000002` from
+the day this document was written until 2026-08-25, one commit after
+`20260819000003` landed.
+
+A stale database aborts with `REFUSING TO RUN`, followed by:
+
+- **the list of missing migrations** — bare versions, comma-separated. No
+  explanation of what each one's absence breaks: `consequence` text exists only
+  for the effect probes below, and only `20260819000001` has any. If the ledger
+  diff names a version you do not recognise, `git log --oneline -- supabase/migrations`
+  is the fastest way to find out what it did.
+- **what a failed probe breaks** — the `consequence:` line, for probe failures
+  only.
+- **the command from §1**, including the `set -a; . /etc/tugpt/migrate.env`
+  line and a pointer back to §5 about the bookkeeping row.
 
 The probes are read-only. The `archive_draft_failed_job` probe calls the RPC
 with a random job id, which the function rejects with `P3B07` before it writes
@@ -207,7 +252,10 @@ anything; the raise aborts the transaction.
 To check the ledger by hand:
 
 ```bash
-curl -s -X POST "$SUPABASE_URL/rest/v1/rpc/applied_migration_versions" \
+# NEXT_PUBLIC_SUPABASE_URL, not SUPABASE_URL — the unprefixed name is defined
+# nowhere in this project, and sourcing worker.env leaves it empty, so the
+# request goes to "/rest/v1/..." with no host and fails without saying why.
+curl -s -X POST "$NEXT_PUBLIC_SUPABASE_URL/rest/v1/rpc/applied_migration_versions" \
   -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
   -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
   -H 'Content-Type: application/json' -d '{}' | tail -c 400
@@ -251,7 +299,7 @@ Prefer §1. This is a fallback, not a shortcut.
 | `failed SASL auth` / `password authentication failed` | Wrong password, or unencoded special characters | Re-encode (§1.2); reset the password if unknown |
 | `Found local migration files to be inserted before the last migration on remote database` | The remote has a migration newer than one you are pushing — usually a hand-applied change or a diverged branch | Do **not** reach for `--include-all` reflexively. Read the list, work out how the remote got ahead, then decide |
 | Push succeeds but preflight still fails a probe | Ledger row present, object absent — a partial apply | Re-run the specific migration's SQL (§5), keeping the existing ledger row |
-| `permission denied for schema supabase_migrations` when querying by hand | Correct — `service_role` has no direct access | Use `applied_migration_versions()` (§4) |
+| `permission denied for schema supabase_migrations` when querying by hand | Expected. Nothing in this repo grants `service_role` access to that schema, and `config.toml` does not expose it to PostgREST either — so both a direct `psql` query and a REST call fail, for different reasons | Use `applied_migration_versions()` (§4) |
 
 ---
 
