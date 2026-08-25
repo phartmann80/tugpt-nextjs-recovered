@@ -339,8 +339,7 @@ This section originally added "and no renewal that can quietly stop working." Th
 > **Open question on the current host.** `tugpt.service`'s `ExecStart` does not pass `--profile proxy`, so the unit that owns the stack does not itself manage Caddy, and it runs with `--remove-orphans`. Whether that removes the Caddy container on restart depends on the Compose version's treatment of profile-excluded services. Settle it without touching anything:
 >
 > ```bash
-> docker compose -p tugpt -f /opt/tugpt/docker-compose.yml \\
->   --dry-run up -d --build --remove-orphans
+> docker compose -p tugpt -f /opt/tugpt/docker-compose.yml --dry-run up -d --build --remove-orphans
 > ```
 >
 > If the printed plan would stop or remove `caddy`, add `--profile proxy` to both `ExecStart` and `ExecStop` in `deploy/systemd/tugpt.service` — otherwise every deploy drops TLS until somebody notices.
