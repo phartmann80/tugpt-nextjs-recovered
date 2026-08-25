@@ -53,6 +53,13 @@ RUN addgroup -S -g 1001 nodejs \
 
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/static ./apps/web/.next/static
+# apps/web/public must exist in the checkout or this COPY fails the build.
+# Git does not track empty directories, so the directory is held open by
+# apps/web/public/.gitkeep. On 2026-08-24 the last three files in it (the
+# create-next-app SVGs) were deleted, the directory vanished from a fresh
+# clone, and this line failed — a break that `next build` cannot reproduce
+# locally, because the developer's working tree still had the empty folder.
+# Do not delete .gitkeep.
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/public ./apps/web/public
 
 USER nextjs
