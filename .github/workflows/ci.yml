@@ -78,6 +78,15 @@ jobs:
   # box was lost with, and one asserting the caddy service still pins its own
   # resolvers in docker-compose.yml.
   #
+  # check-cert.sh is the same class of artifact and was shipped with shellcheck
+  # and no execution, which is that mistake one level further down: a checker
+  # run weekly by cron, whose green output is trusted, that nobody had ever
+  # watched fail. Its fixtures run here too.
+  #
+  # The shellcheck globs are deliberately not a hand-maintained file list - a
+  # new deploy script is covered by adding it, not by remembering to add it
+  # here as well.
+  #
   # These are POSIX sh scripts with no dependencies; shellcheck ships on the
   # ubuntu-latest runner. Nothing here touches a server.
   deploy-scripts:
@@ -87,10 +96,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Shellcheck
-        run: shellcheck -s sh deploy/check-host.sh deploy/check-host.test.sh deploy/caddy/check-cert.sh
+        run: shellcheck -s sh deploy/*.sh deploy/caddy/*.sh
 
       - name: Run host-check fixtures
         run: sh deploy/check-host.test.sh
+
+      - name: Run cert-check fixtures
+        run: sh deploy/caddy/check-cert.test.sh
 
   docker-build:
     runs-on: ubuntu-latest
