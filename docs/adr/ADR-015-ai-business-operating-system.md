@@ -2,8 +2,9 @@
 
 ## Status
 
-Proposed. Product-direction ADR, written against the owner's approved scope definition of
-2026-08-25, which supersedes both earlier product-direction briefs.
+**Accepted 2026-08-25** by the owner, in full and as written. Product-direction ADR, written
+against the approved scope definition of the same date, which supersedes both earlier
+product-direction briefs.
 
 This ADR is architecture, not a commitment to dates. Every area in the brief is treated as
 in scope. Where this document sequences work later, that is sequencing — a statement about
@@ -12,6 +13,36 @@ what must exist first — not a reduction of scope. Nothing here is dropped.
 **Delivery queue is unchanged and this ADR does not touch it:** server rebuild (owner) →
 draft pilot → chat MVP. Everything below describes what those three milestones are building
 toward.
+
+### Called out as binding at acceptance
+
+Three decisions were named as binding rather than advisory. A future PR that breaks one of
+these is wrong even if it is otherwise good:
+
+- **D2's non-negotiable property** — no capability may have exactly one *possible* provider.
+  Every integration PR is held to it, **including IONOS voice and HeyGen video**, whose
+  credentials and accounts are already in hand. Having the vendor is not an argument for
+  writing the code against that vendor.
+- **D3's trust matrix per (org, agent, tool class).** One dial per agent was named as "the
+  cheap and wrong version" and is closed off.
+- **D5's separation of flags from entitlements.** Two systems, different lifecycles,
+  different blast radii.
+
+And a bar for D6, for the moment "thin" comes under pressure to thicken — which it will:
+
+> **Does the AI need it in the hot path? If not, it belongs in a connector.**
+
+### Follow-through arising from this ADR
+
+Owner-approved, each in its own PR:
+
+| Finding | Action | State |
+|---|---|---|
+| Part 3 row 13 — five readerless keys in `featureFlagService`, three defaulting to `true` | Neutralize them. The webhook's `whatsapp_integration` reader stays exactly as it is | **done 2026-08-25** |
+| §3.3 — six dead `JobType` literals | **Empty the type to what exists**, rather than annotate | open |
+
+The preference for emptying over annotating was explicit: dead literals that read as
+work-in-progress are how the pgTAP rot started.
 
 ## Context
 
