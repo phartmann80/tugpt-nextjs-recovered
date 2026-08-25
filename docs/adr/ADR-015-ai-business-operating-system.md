@@ -39,10 +39,19 @@ Owner-approved, each in its own PR:
 | Finding | Action | State |
 |---|---|---|
 | Part 3 row 13 — five readerless keys in `featureFlagService`, three defaulting to `true` | Neutralize them. The webhook's `whatsapp_integration` reader stays exactly as it is | **done 2026-08-25** |
-| §3.3 — six dead `JobType` literals | **Empty the type to what exists**, rather than annotate | open |
+| §3.3 — six dead `JobType` literals | **Empty the type to what exists**, rather than annotate | **done 2026-08-25** |
 
 The preference for emptying over annotating was explicit: dead literals that read as
 work-in-progress are how the pgTAP rot started.
+
+**Correction to §3.3, recorded here rather than in the audit.** §3.3 says six of the seven
+`JobType` literals are dead. It is seven — `whatsapp.process_message` appears nowhere but its
+own declaration, and the queue payloads carry no `type` field for it to dispatch on, so no
+literal was ever live. Emptying the type to what exists therefore emptied it to nothing, and
+everything parameterized by it went with it: `packages/jobs/src/types.ts` is deleted in full,
+including the unwired `InMemoryJobQueue` that ADR-014 §4 had left for a future session to
+decide on. Part 3 is left as written — the pin is there to preserve the audit as it stood,
+and a correction is more useful next to the action taken than smuggled into the record.
 
 ## Context
 
