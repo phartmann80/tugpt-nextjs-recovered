@@ -5,19 +5,104 @@ import type { Database } from '@tugpt/database';
 
 export type RouteType = 'auth' | 'protected' | 'public';
 
+/**
+ * Segment-aware prefix match: `/api/v1/drafts` matches itself and
+ * `/api/v1/drafts/<id>/approve`, but NOT `/api/v1/draftsomething`.
+ *
+ * `startsWith` alone is wrong for an authorization decision. The old
+ * `pathname.startsWith('/auth')` classified `/authorize-payments` as an auth
+ * route, and the same mistake in the other direction would hand a public
+ * classification to a path that merely shares a prefix with a public one.
+ */
+function underPrefix(pathname: string, prefix: string): boolean {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
+/**
+ * The paths this proxy deliberately does NOT authenticate.
+ *
+ * Read `public` as "the proxy is not the thing authenticating this", not as
+ * "unauthenticated". Every `/api/v1` entry below authenticates itself via
+ * createAuthenticatedServerClient + AuthService, with RLS behind it, and
+ * returns a real 401/403 JSON body rather than an HTML redirect — which is
+ * why they are not routed through the proxy's session check.
+ *
+ * This list is exhaustive by construction: classifyRoute denies anything not
+ * on it. Adding a route without adding it here makes the route protected,
+ * which is the safe direction, and proxy-route-coverage.test.ts fails until
+ * somebody classifies it on purpose.
+ */
+const PUBLIC_EXACT: ReadonlySet<string> = new Set([
+  // Redirects to /dashboard/drafts. Renders nothing and reads nothing; the
+  // proxy gates the destination.
+  '/',
+  // Liveness probe. Returns no tenant data and is polled without credentials —
+  // by the container healthcheck in docker-compose.yml, among others.
+  '/api/v1/health',
+]);
+
+const PUBLIC_PREFIXES: readonly string[] = [
+  // Meta calls this unauthenticated; it is gated by HMAC signature and the
+  // hardcoded whatsapp_integration flag (ADR-010 amendment 2).
+  '/api/v1/webhooks',
+  // Handlers authenticate and resolve tenant context; RLS scopes the rows.
+  '/api/v1/drafts',
+  '/api/v1/organizations',
+];
+
+/**
+ * Deny by default.
+ *
+ * This used to be an allowlist of protected prefixes (`/dashboard`,
+ * `/settings`, `/crm`, `/organizations`) with a `public` fallback, which fails
+ * open: a page added at a path nobody remembered to add to that list was
+ * served with no authentication check at all, and nothing about writing the
+ * page would reveal it. The failure was silence.
+ *
+ * Now anything not explicitly listed above is `protected`. A forgotten route
+ * is inaccessible rather than exposed, and the mistake announces itself the
+ * first time somebody loads the page.
+ */
 export function classifyRoute(pathname: string): RouteType {
-  if (pathname.startsWith('/auth') || pathname.startsWith('/api/v1/auth')) {
+  if (underPrefix(pathname, '/auth') || underPrefix(pathname, '/api/v1/auth')) {
     return 'auth';
   }
-  if (
-    pathname.startsWith('/dashboard') ||
-    pathname.startsWith('/settings') ||
-    pathname.startsWith('/crm') ||
-    pathname.startsWith('/organizations')
-  ) {
-    return 'protected';
+  if (PUBLIC_EXACT.has(pathname)) {
+    return 'public';
   }
-  return 'public';
+  if (PUBLIC_PREFIXES.some((prefix) => underPrefix(pathname, prefix))) {
+    return 'public';
+  }
+  return 'protected';
+}
+
+/** Is this an API path, i.e. one whose caller expects JSON rather than HTML? */
+function isApiPath(pathname: string): boolean {
+  return underPrefix(pathname, '/api');
+}
+
+/**
+ * How a protected route refuses an unauthenticated caller.
+ *
+ * A browser navigating to a page should be redirected to the login form. A
+ * `fetch()` for JSON should not: following a redirect to an HTML login page
+ * yields a 200 with a `<!DOCTYPE html>` body, so the caller's `res.json()`
+ * throws a parse error instead of seeing the 401 that actually happened. The
+ * same reasoning applies to the container healthcheck, which follows redirects
+ * and would report a broken app as healthy.
+ *
+ * Under the old fail-open classifier this branch was unreachable, because
+ * every unlisted path — including every API path — was public. Deny-by-default
+ * makes it reachable for any API route added without a deliberate
+ * classification, which is exactly when a clear 401 matters.
+ */
+function denyUnauthenticated(request: NextRequest, pathname: string): NextResponse {
+  if (isApiPath(pathname)) {
+    return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 });
+  }
+  const loginUrl = new URL('/auth/login', request.url);
+  loginUrl.searchParams.set('redirect', pathname);
+  return NextResponse.redirect(loginUrl);
 }
 
 export async function proxy(request: NextRequest) {
@@ -42,10 +127,10 @@ export async function proxy(request: NextRequest) {
     const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
     if (!supabaseUrl || !supabaseKey) {
-      // Fallback: no Supabase env configured, redirect to login
-      const loginUrl = new URL('/auth/login', request.url);
-      loginUrl.searchParams.set('redirect', pathname);
-      return NextResponse.redirect(loginUrl);
+      // No Supabase env configured. This means the image was built without
+      // NEXT_PUBLIC_* build args (see docker-compose.yml) and the app is
+      // entirely dead — refuse rather than pretend.
+      return denyUnauthenticated(request, pathname);
     }
 
     // Create a response that we can write refreshed cookies into
@@ -78,9 +163,7 @@ export async function proxy(request: NextRequest) {
     const { data: claimsData, error: claimsError } = await supabase.auth.getClaims();
 
     if (claimsError || !claimsData) {
-      const loginUrl = new URL('/auth/login', request.url);
-      loginUrl.searchParams.set('redirect', pathname);
-      return NextResponse.redirect(loginUrl);
+      return denyUnauthenticated(request, pathname);
     }
 
     // Propagate headers to downstream route handlers and server components
