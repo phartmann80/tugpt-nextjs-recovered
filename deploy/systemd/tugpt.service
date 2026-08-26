@@ -35,18 +35,27 @@
 # web-only deployment. The two units declare Conflicts= on each other so
 # they cannot both be active — leave it that way.
 #
-# KNOWN GAP: ExecStart below does not pass `--profile proxy`, so this unit
-# does not itself start or manage the Caddy container that terminates TLS.
-# Caddy is running on the box; it is simply outside the thing that claims to
-# own the stack, and `--remove-orphans` makes its fate on restart a question
-# rather than a fact. Settle it non-destructively before the next deploy:
+# Both Exec lines pass `--profile proxy`, so this unit owns the Caddy
+# container as well as web and the two workers. Added 2026-08-26.
 #
-#   docker compose -p tugpt -f /opt/tugpt/docker-compose.yml \
-#     --dry-run up -d --build --remove-orphans
+# It was not always so, and the reason for the change is worth keeping. The
+# unit used to run without the profile, which left Caddy started by hand and
+# outside the thing that claims to own the stack. A `--dry-run` on 2026-08-25
+# established that `up -d --build --remove-orphans` touched only web and the
+# workers — Caddy was neither stopped nor removed — so there was no active
+# hazard, and its `restart: unless-stopped` policy meant it survived reboots
+# too.
 #
-# If that plan says it would remove or stop caddy, add `--profile proxy` to
-# both ExecStart and ExecStop here — otherwise every deploy drops TLS until
-# somebody notices.
+# It is still the wrong shape. TLS was depending on an orphan-exemption plus a
+# container restart policy rather than on the unit that supervises the stack:
+# two behaviours that happen to be favourable, neither of which anything here
+# asserts. Passing the profile makes ownership explicit instead of lucky.
+#
+# One consequence to expect: a `systemctl restart tugpt.service` now recycles
+# Caddy along with everything else, where before it left the container alone.
+# That is a brief interruption, not a re-issuance — the certificate and ACME
+# account key live in the caddy_data named volume, so Caddy reloads what it
+# already has rather than going back to Let's Encrypt.
 
 [Unit]
 Description=TuGPT.ai Docker Compose stack
@@ -63,8 +72,8 @@ WorkingDirectory=/opt/tugpt
 # declares them with `:?` so a missing value fails the unit instead of baking an
 # empty string into the web image.
 EnvironmentFile=/etc/tugpt/web.env
-ExecStart=/usr/bin/docker compose -p tugpt -f /opt/tugpt/docker-compose.yml up -d --build --remove-orphans
-ExecStop=/usr/bin/docker compose -p tugpt -f /opt/tugpt/docker-compose.yml down
+ExecStart=/usr/bin/docker compose -p tugpt -f /opt/tugpt/docker-compose.yml --profile proxy up -d --build --remove-orphans
+ExecStop=/usr/bin/docker compose -p tugpt -f /opt/tugpt/docker-compose.yml --profile proxy down
 TimeoutStartSec=0
 
 [Install]

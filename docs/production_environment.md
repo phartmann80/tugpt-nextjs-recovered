@@ -334,15 +334,13 @@ Caddy rather than nginx: certificates are obtained and renewed from Let's Encryp
 
 This section originally added "and no renewal that can quietly stop working." That was wrong, and the 2026-08-24 deployment showed how — renewal can fail silently for reasons outside Caddy, DNS being the one we hit. See the DNS note below and `deploy/caddy/check-cert.sh`.
 
-**It is off by default.** The compose service carries `profiles: ["proxy"]`, so `docker compose up -d web` neither starts it nor can start it by accident.
+**It is off by default in compose.** The service carries `profiles: ["proxy"]`, so `docker compose up -d web` neither starts it nor can start it by accident. `tugpt.service` passes `--profile proxy`, so the unit that owns the stack starts and stops it along with everything else.
 
-> **Open question on the current host.** `tugpt.service`'s `ExecStart` does not pass `--profile proxy`, so the unit that owns the stack does not itself manage Caddy, and it runs with `--remove-orphans`. Whether that removes the Caddy container on restart depends on the Compose version's treatment of profile-excluded services. Settle it without touching anything:
+> **Settled 2026-08-26.** `tugpt.service` used to run without `--profile proxy`, which left Caddy outside the unit that owns the stack while `--remove-orphans` ran. A `--dry-run` showed the plan touched only `web` and the two workers — Caddy was neither stopped nor removed — so there was never an outage waiting to happen, and `restart: unless-stopped` carried it across reboots as well.
 >
-> ```bash
-> docker compose -p tugpt -f /opt/tugpt/docker-compose.yml --dry-run up -d --build --remove-orphans
-> ```
+> It was still the wrong shape: TLS depended on an orphan-exemption plus a container restart policy rather than on the unit that supervises the stack. Both `ExecStart` and `ExecStop` now pass `--profile proxy`.
 >
-> If the printed plan would stop or remove `caddy`, add `--profile proxy` to both `ExecStart` and `ExecStop` in `deploy/systemd/tugpt.service` — otherwise every deploy drops TLS until somebody notices.
+> **Expect one change in behaviour.** `systemctl restart tugpt.service` now recycles Caddy along with everything else, where before it left the container alone. That is a brief interruption, not a re-issuance — the certificate and the ACME account key live in the `caddy_data` named volume, so Caddy reloads what it already has instead of going back to Let's Encrypt.
 
 **Before enabling:**
 
@@ -441,8 +439,9 @@ docker compose -p tugpt logs --tail=50 web whatsapp-worker draft-worker caddy
 curl -fsS https://tugpt.ai/api/v1/health
 ```
 
-The proxy does not need restarting for an app release; Caddy routes to whatever
-`web` is currently serving.
+Since 2026-08-26 the unit passes `--profile proxy`, so a restart recycles Caddy
+too. Brief, and it reloads the certificate from the `caddy_data` volume rather
+than re-issuing.
 
 An explicit `docker compose build` is only needed when building by hand outside
 systemd — and then source the env file first (5.4a), because the build args are
