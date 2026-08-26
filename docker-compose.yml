@@ -144,28 +144,21 @@ services:
       dockerfile: apps/worker/Dockerfile
     image: tugpt-worker:latest
     restart: unless-stopped
-    # RUNS UNDER tsx, NOT `node dist/...` — do not "tidy" this back.
+    # Runs the compiled output, which is only correct because every
+    # @tugpt/* package now builds to CommonJS dist/ and points `main` there.
     #
-    # Every @tugpt/* package sets "main": "./src/index.ts" and none of them
-    # has a build script, so no dist/ is ever produced for them and this
-    # image's `turbo build --filter=@tugpt/worker` compiles only the worker's
-    # own src/. The compiled worker still resolves @tugpt/database to raw
-    # TypeScript, and under ESM Node needs explicit import extensions that
-    # those packages do not write — so `node dist/index.js` dies at boot with
-    # ERR_MODULE_NOT_FOUND on packages/database/src/client.
+    # Between 2026-08-25 and this change it ran under tsx instead. The
+    # packages shipped "main": "./src/index.ts" with no build script, so the
+    # compiled worker resolved @tugpt/database to raw TypeScript; Node
+    # type-stripped it and then applied ESM rules to the package's own
+    # extensionless `./client` import, which do not infer extensions. Both
+    # workers crash-looped at boot with ERR_MODULE_NOT_FOUND.
     #
-    # It never showed up before 2026-08-25 because every earlier path (dev,
-    # e2e, the old native systemd units) ran under tsx, which resolves
-    # extensionless imports.
-    #
-    # tsx is a devDependency of @tugpt/worker and this image installs dev
-    # dependencies (`pnpm install --frozen-lockfile`, no --prod). Adding
-    # --prod to that install breaks production.
-    #
-    # Reverting to `node dist/...` requires the @tugpt/* packages to build
-    # first. worker-start-command.test.ts enforces exactly that, so the
-    # revert can only go green once the builds exist.
-    command: ["pnpm", "exec", "tsx", "src/index.ts"]
+    # worker-start-command.test.ts pins the precondition rather than the
+    # command: `node dist/...` is allowed only while every @tugpt/* package
+    # the worker depends on has a build script. Remove one and this line
+    # turns the suite red before it can reach a container.
+    command: ["node", "dist/index.js"]
     env_file:
       - /etc/tugpt/worker.env
     networks:
@@ -183,8 +176,8 @@ services:
       dockerfile: apps/worker/Dockerfile
     image: tugpt-worker:latest
     restart: unless-stopped
-    # Runs under tsx for the same reason as whatsapp-worker above.
-    command: ["pnpm", "exec", "tsx", "src/draft-index.ts"]
+    # Compiled output, same reasoning as whatsapp-worker above.
+    command: ["node", "dist/draft-index.js"]
     env_file:
       - /etc/tugpt/worker.env
     networks:

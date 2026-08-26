@@ -96,7 +96,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Shellcheck
-        run: shellcheck -s sh deploy/*.sh deploy/caddy/*.sh
+        run: shellcheck -s sh deploy/*.sh deploy/caddy/*.sh .github/scripts/*.sh
 
       - name: Run host-check fixtures
         run: sh deploy/check-host.test.sh
@@ -104,17 +104,29 @@ jobs:
       - name: Run cert-check fixtures
         run: sh deploy/caddy/check-cert.test.sh
 
+      # The boot check in docker-build is only worth its place if it reports
+      # correctly. These fixtures drive it against a stubbed docker and cover
+      # the two failures that matter: no start line at all (the 2026-08-25
+      # crash-loop) and a start line followed by an exit, which a plain
+      # log-grep would call a pass.
+      - name: Run worker-boot-check fixtures
+        run: sh .github/scripts/worker-boot-check.test.sh
+
   docker-build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Build-only validation that apps/web/Dockerfile and
-      # apps/worker/Dockerfile still produce working images (VPS
-      # deployment target, see docs/production_environment.md section 5).
-      # No push/registry step here on purpose — images are built directly
-      # on the VPS from this same Dockerfile during deploy.
+      # Validates that apps/web/Dockerfile and apps/worker/Dockerfile still
+      # produce working images (VPS deployment target, see
+      # docs/production_environment.md section 5). No push/registry step here
+      # on purpose — images are built directly on the VPS from these same
+      # Dockerfiles during deploy.
+      #
+      # The worker image is additionally started, below. It used to be built
+      # and never run, which is how an image that died at boot passed this
+      # job on every PR before 2026-08-25.
       - name: Build web image
         uses: docker/build-push-action@v6
         with:
@@ -123,10 +135,21 @@ jobs:
           push: false
           tags: tugpt-web:ci
 
+      # `load: true` puts the image in the local daemon so the next step can
+      # actually start it. Without it buildx keeps the result in its own cache
+      # and `docker run` finds nothing.
       - name: Build worker image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: apps/worker/Dockerfile
           push: false
+          load: true
           tags: tugpt-worker:ci
+
+      # The gap that let the 2026-08-25 crash-loop reach production: this job
+      # built the worker image on every PR and never started it, so an image
+      # that died at boot passed every gate. Building an artifact is not
+      # evidence that it runs.
+      - name: Boot both workers from the built image
+        run: sh .github/scripts/worker-boot-check.sh tugpt-worker:ci
