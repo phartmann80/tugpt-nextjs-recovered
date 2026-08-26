@@ -81,7 +81,23 @@ Required variables:
 
 No `LOGICC_*`, `ANYMIZE_*`, or `MODEL` variables are needed: Logicc and Anymize were removed on 2026-08-18 (cost and cross-project isolation, respectively).
 
-`LANGDOCK_MODEL` names one model from a hard allowlist — `gpt-5-mini`, `gpt-5.1`, `gpt-5.2`, `gpt-5` (`packages/ai-providers/src/langdock.ts`) — and defaults to `gpt-5-mini`. The list is ordered cheapest-first and is a cost control, not a suggestion: anything outside it is refused before a request is made. On a rate limit (HTTP 429) or a model-rejection 400, the orchestrator rotates to the next model in that order; it does not route on capability, cost or task type.
+Model selection is **two** variables with a precedence, resolved at worker boot (`apps/worker/src/draft-orchestrator-factory.ts`):
+
+| Variable | Effect |
+|---|---|
+| `LANGDOCK_MODELS` | An ordered, comma-separated rotation list, cheapest first. **This is the recommended setting, and what production runs.** On a per-model quota rejection the next model is tried within the same attempt. |
+| `LANGDOCK_MODEL` | Pins exactly one model and **disables rotation**. It is the escape hatch, and it is *ignored* when `LANGDOCK_MODELS` is also set — the more specific variable wins, and the worker logs that it did rather than swallowing it. |
+| Neither set | The whole allowlist rotates: `gpt-5-mini,gpt-5.1,gpt-5.2,gpt-5`. |
+
+The allowlist (`packages/ai-providers/src/langdock.ts`) is a hard cost control, not a suggestion: anything outside it is rejected at boot, so a typo or a forbidden (expensive) model fails fast rather than burning retries or money. Changing models is an env edit plus a worker restart, never a code deploy.
+
+Rotation is triggered by failure — a rate limit (HTTP 429) or a model-rejection 400 — not by capability, cost or task type. It is failover, not routing.
+
+Do not assume which variable a given host uses. The worker resolves it at boot and says so:
+
+```bash
+journalctl -u tugpt-draft-worker -n 50 --no-pager | grep 'model order resolved'
+```
 
 **There is no `auto` value.** Langdock's OpenAI-compatible endpoint returns HTTP 400 `invalid_request_error` for it — verified against the live API on 2026-08-19. Earlier revisions of this README described `auto` routing; that was wrong, and reintroducing `auto` breaks every request. See ADR-006.
 
