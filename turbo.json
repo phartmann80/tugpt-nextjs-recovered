@@ -27,17 +27,32 @@
     "apps/worker/Dockerfile"
   ],
 
+  // Every @tugpt/* package now compiles to dist/ and points `main` and
+  // `types` there, so anything that resolves one of them needs it built
+  // first. That is why typecheck, test and dev all carry `^build` — before
+  // 2026-08-26 the packages were consumed as raw TypeScript and none of them
+  // needed it.
+  //
+  // Without this, `turbo typecheck` fails with TS2307 "Cannot find module
+  // '@tugpt/security'" whenever the build cache happens to be cold for a
+  // package the task depends on, which is an ordering bug that shows up as a
+  // type error and sends people looking in the wrong place.
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
     },
     "lint": {},
-    "test": {},
+    "test": {
+      "dependsOn": ["^build"]
+    },
     "dev": {
+      "dependsOn": ["^build"],
       "cache": false,
       "persistent": true
     },
-    "typecheck": {}
+    "typecheck": {
+      "dependsOn": ["^build"]
+    }
   }
 }
