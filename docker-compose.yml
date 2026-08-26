@@ -1,12 +1,15 @@
 # docker-compose.yml
 #
-# Production runtime for TuGPT.ai on its dedicated VPS (212.227.44.13 —
-# see docs/production_environment.md, section 5, for the full deployment
-# runbook, including the cutover plan from the existing systemd-native
-# workers to this stack). Run from /opt/tugpt. Today that means the web
-# service only — read the warning below before running it unfiltered:
+# Production runtime for TuGPT.ai on its dedicated VPS (212.227.44.13).
+# See docs/production_environment.md for the deployment runbook.
 #
-#   docker compose -p tugpt up -d --build web
+# As of the 2026-08-25 rebuild this file IS production. The host was
+# reinstalled after the 2026-08-24 compromise, so no systemd-native
+# workers survived; deploy/systemd/tugpt.service owns the whole stack —
+# web, both workers, and Caddy under the `proxy` profile — and is enabled
+# so it comes back after a reboot. Deploying a new commit is:
+#
+#   cd /opt/tugpt && git pull && systemctl restart tugpt.service
 #
 # The explicit `-p tugpt` project name namespaces containers/networks
 # under a stable, predictable prefix regardless of what else runs on the
@@ -15,30 +18,24 @@
 # Secrets and per-environment config are NOT stored in this repo and are
 # NOT baked into images. Every service loads its environment at container
 # start via `env_file`, from a file that lives only on the host, under
-# /etc/tugpt/ (root-owned, 0600) — never committed to git. This matches
-# the existing systemd-native workers' env layout
-# (/etc/tugpt/web.env, /etc/tugpt/worker.env) so the cutover doesn't
-# require re-provisioning secrets.
+# /etc/tugpt/ (root-owned, 0600) — never committed to git.
 #
 # ---------------------------------------------------------------------
-# WARNING — bringing this whole file up starts worker containers.
+# STANDING RULE — one consumer per PGMQ queue.
 #
-# `whatsapp-worker` and `draft-worker` below are the SAME jobs that
-# tugpt-whatsapp-worker.service and tugpt-draft-worker.service run
-# natively on the host today. Starting the full stack while those
-# systemd units are active puts two consumers on each PGMQ queue
-# (whatsapp_inbound, draft_generation) and double-processes every
-# message.
+# `whatsapp-worker` and `draft-worker` below are the only consumers of
+# whatsapp_inbound and draft_generation respectively. A second consumer —
+# a native systemd unit, a stray `docker compose up` under a different
+# project name, a hand-run `pnpm dev` against production credentials —
+# double-processes every message.
 #
-# As of 2026-08-20 only the web app is being containerized; the workers
-# stay on systemd. Deploy web ALONE:
+# There are no native worker units on the current host, so there is
+# nothing to conflict with today. The rule outlives that fact: check
+# before starting anything that polls.
 #
-#   docker compose -p tugpt up -d --build web
-#
-# or via deploy/systemd/tugpt-web.service, which does exactly that and
-# nothing else. deploy/systemd/tugpt.service brings up the whole stack
-# and must not be enabled until the worker cutover in section 5.4 of
-# docs/production_environment.md is executed deliberately.
+# Related: tugpt.service and tugpt-web.service declare Conflicts= on each
+# other. tugpt-web.service brings up `web` alone and belongs to the
+# earlier web-only deployment; it must not run alongside tugpt.service.
 # ---------------------------------------------------------------------
 
 services:
@@ -147,7 +144,28 @@ services:
       dockerfile: apps/worker/Dockerfile
     image: tugpt-worker:latest
     restart: unless-stopped
-    command: ["node", "dist/index.js"]
+    # RUNS UNDER tsx, NOT `node dist/...` — do not "tidy" this back.
+    #
+    # Every @tugpt/* package sets "main": "./src/index.ts" and none of them
+    # has a build script, so no dist/ is ever produced for them and this
+    # image's `turbo build --filter=@tugpt/worker` compiles only the worker's
+    # own src/. The compiled worker still resolves @tugpt/database to raw
+    # TypeScript, and under ESM Node needs explicit import extensions that
+    # those packages do not write — so `node dist/index.js` dies at boot with
+    # ERR_MODULE_NOT_FOUND on packages/database/src/client.
+    #
+    # It never showed up before 2026-08-25 because every earlier path (dev,
+    # e2e, the old native systemd units) ran under tsx, which resolves
+    # extensionless imports.
+    #
+    # tsx is a devDependency of @tugpt/worker and this image installs dev
+    # dependencies (`pnpm install --frozen-lockfile`, no --prod). Adding
+    # --prod to that install breaks production.
+    #
+    # Reverting to `node dist/...` requires the @tugpt/* packages to build
+    # first. worker-start-command.test.ts enforces exactly that, so the
+    # revert can only go green once the builds exist.
+    command: ["pnpm", "exec", "tsx", "src/index.ts"]
     env_file:
       - /etc/tugpt/worker.env
     networks:
@@ -165,7 +183,8 @@ services:
       dockerfile: apps/worker/Dockerfile
     image: tugpt-worker:latest
     restart: unless-stopped
-    command: ["node", "dist/draft-index.js"]
+    # Runs under tsx for the same reason as whatsapp-worker above.
+    command: ["pnpm", "exec", "tsx", "src/draft-index.ts"]
     env_file:
       - /etc/tugpt/worker.env
     networks:

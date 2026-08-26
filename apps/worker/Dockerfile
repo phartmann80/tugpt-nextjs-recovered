@@ -8,8 +8,14 @@
 # header comment: "do not make the default worker process run both
 # WhatsApp and draft generation concurrently").
 #
-#   docker compose run whatsapp-worker  -> node dist/index.js
-#   docker compose run draft-worker     -> node dist/draft-index.js
+#   docker compose run whatsapp-worker  -> pnpm exec tsx src/index.ts
+#   docker compose run draft-worker     -> pnpm exec tsx src/draft-index.ts
+#
+# Those are tsx, not `node dist/...`, and that is deliberate — see the long
+# comment on whatsapp-worker in docker-compose.yml. In short: no @tugpt/*
+# package has a build script, so the worker's compiled output still resolves
+# them to raw TypeScript with extensionless ESM imports, and `node dist/...`
+# dies at boot with ERR_MODULE_NOT_FOUND.
 #
 # Build context MUST be the monorepo root (same reasoning as apps/web):
 #
@@ -31,9 +37,14 @@ COPY --from=pruner /app/out/pnpm-lock.yaml ./pnpm-lock.yaml
 RUN pnpm install --frozen-lockfile
 
 # ---- 3. Build ----
-# Building with the `^build` dependency graph (see turbo.json) also builds
-# every @tugpt/* package the worker depends on (ai-orchestration,
-# ai-providers, database, jobs, observability).
+# NOTE: this does NOT build the @tugpt/* packages, whatever `^build` in
+# turbo.json implies. None of ai-orchestration, ai-providers, database, jobs
+# or observability defines a build script, so `^build` resolves to nothing
+# for them and only the worker's own src/ is compiled. That gap is what
+# produced the 2026-08-25 crash-loop.
+#
+# The step is kept because it still typechecks-and-emits the worker and will
+# do the right thing the moment those packages gain build scripts.
 FROM base AS builder
 COPY --from=installer /app/ .
 COPY --from=pruner /app/out/full/ .
@@ -53,6 +64,8 @@ COPY --from=builder --chown=worker:nodejs /app ./
 USER worker
 WORKDIR /app/apps/worker
 
-# Overridden by docker-compose.yml `command:` per service
-# (whatsapp-worker -> dist/index.js, draft-worker -> dist/draft-index.js).
-CMD ["node", "dist/index.js"]
+# Overridden by docker-compose.yml `command:` per service. This default is
+# the WhatsApp worker, and it runs under tsx for the reason given above —
+# `node dist/index.js` here would crash on boot, so a bare `docker run` of
+# this image would be broken in a way compose happened to hide.
+CMD ["pnpm", "exec", "tsx", "src/index.ts"]
