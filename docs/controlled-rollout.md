@@ -44,6 +44,12 @@ rather than assuming it.
       `NO_ACTIVE_QUOTA_PERIOD` — that is a `reason` returned by `private.reserve_draft_usage`
       which the worker logs and does not persist. Looking for it in `draft_generation_jobs` finds
       nothing and reads like the quota check never ran.
+
+      **As of migration `20260826000001` you no longer have to remember this.**
+      `public.enable_draft_generation_for_org(org_id, hard_ceiling)` creates the period and
+      enables the org flag in one transaction, and a trigger on `feature_flags` refuses to enable
+      the flag for an org with no covering period (`P3B17 DRAFT_QUOTA_PERIOD_REQUIRED`). The
+      checklist item survives as a *check*, not as a thing to do by hand — see §4.
 - [ ] Each pilot organization has an `ai_draft_configs` row, and it points at that organization's
       business profile. The worker looks the config up by `(business_profile_id, organization_id)`
       and takes the job's `business_profile_id` from the job row, so a config that exists but
@@ -107,10 +113,25 @@ If that returns anything, disarm immediately (§6) and find out why before conti
 One organization. Not two, not "the small ones".
 
 ```sql
-INSERT INTO public.feature_flags (organization_id, key, is_enabled)
-VALUES ('<ORG_UUID>', 'ai_draft_generation', true)
-ON CONFLICT (organization_id, key) DO UPDATE SET is_enabled = true, updated_at = now();
+-- Creates the quota period AND enables the org flag, in one transaction.
+-- Idempotent: safe to re-run, and it will not overwrite a live ceiling.
+SELECT * FROM public.enable_draft_generation_for_org('<ORG_UUID>', <HARD_CEILING>);
+```
 
+Read the returned row before going further. It answers three questions at once:
+
+| Column | What it tells you |
+|---|---|
+| `quota_created` | `true` = a period was created now. `false` = one already covered today and was reused, which is fine. |
+| `period_start` / `period_end` / `hard_ceiling` | The window jobs will be counted against, and the ceiling. |
+| `global_flag_enabled` | Whether §3 actually armed. |
+| `effective` | **What `is_feature_enabled` will answer.** This is the one that matters. |
+
+`effective` is `false` unless the global row is *also* `true`. That is the design, not a fault:
+running this RPC for an organization changes nothing observable until the global row is armed, so
+you can prepare every pilot org ahead of the session and still start nothing.
+
+```sql
 -- Confirm the intended org resolves true, and re-confirm nobody else does.
 SELECT o.slug, public.is_feature_enabled(o.id, 'ai_draft_generation') AS enabled
 FROM public.organizations o
@@ -119,6 +140,22 @@ ORDER BY enabled DESC, o.slug;
 ```
 
 Exactly one `true`. Note the time — the monitoring window starts now.
+
+> **If you enable the flag by hand instead** — a raw `INSERT` into `feature_flags`, which is what
+> this section said before migration `20260826000001` — and the organization has no quota period
+> covering today, the statement is **refused** with `P3B17 DRAFT_QUOTA_PERIOD_REQUIRED`. That is
+> the guard working. Before it existed, the same action succeeded and then skipped every job with
+> `skip_reason = 'QUOTA_DENIED'`, which looks like a provider problem and is not one. Use the RPC.
+
+### Rolling back one organization
+
+```sql
+SELECT * FROM public.disable_draft_generation_for_org('<ORG_UUID>');
+```
+
+`effective` comes back `false`. The organization's `draft_quota_limits` rows are **deliberately
+left in place** — they carry the consumed usage for the period, which is exactly the record you
+want to keep after a rollback. To stop *everything* at once, disarm globally instead (§6).
 
 ## 5. Watch
 
@@ -247,7 +284,8 @@ Reach for the kill switch first and diagnose afterwards. Org rows can stay as th
 `false` vetoes all of them, and leaving them in place means re-arming resumes exactly the previous
 population — which is also the thing to remember before re-arming.
 
-**Stop one organization** without affecting the others:
+**Stop one organization** without affecting the others — equivalent to the RPC in §4, and safe to
+use directly because the quota guard only applies to *enabling*:
 
 ```sql
 UPDATE public.feature_flags
