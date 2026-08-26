@@ -12,7 +12,7 @@ AI-powered platform built with Next.js 16, React 19, and Supabase. Phase 3A (Sec
 | UI | React 19, Tailwind CSS 4, Radix UI (shadcn/ui) |
 | Language | TypeScript 5.4+ (strict mode) |
 | Database & Auth | Supabase (PostgreSQL, RLS, GoTrue) |
-| AI providers | Langdock (sole provider, auto model routing — see [ADR-006](docs/adr/ADR-006-provider-adapter-architecture.md)) |
+| AI providers | Langdock (sole provider; four-model cost allowlist, cheapest first — see [ADR-006](docs/adr/ADR-006-provider-adapter-architecture.md)) |
 | Worker runtime | tsx (ESM syntax in CJS mode, no `"type": "module"`) |
 | Testing | Vitest (JS/TS), pgTAP (SQL) |
 | Linting | ESLint 9 (flat config) |
@@ -79,7 +79,11 @@ Required variables:
 | `IONOS_API_KEY` | IonOS AI Assistant API | **Secret** (server only) |
 | `HUBSPOT_API_KEY` | HubSpot CRM API | **Secret** (server only) |
 
-No `LOGICC_*`, `ANYMIZE_*`, or `MODEL` variables are needed: Logicc and Anymize were removed on 2026-08-18 (cost and cross-project isolation, respectively), and Langdock is never pinned to a specific model — it always uses Langdock's `auto` routing. See ADR-006.
+No `LOGICC_*`, `ANYMIZE_*`, or `MODEL` variables are needed: Logicc and Anymize were removed on 2026-08-18 (cost and cross-project isolation, respectively).
+
+`LANGDOCK_MODEL` names one model from a hard allowlist — `gpt-5-mini`, `gpt-5.1`, `gpt-5.2`, `gpt-5` (`packages/ai-providers/src/langdock.ts`) — and defaults to `gpt-5-mini`. The list is ordered cheapest-first and is a cost control, not a suggestion: anything outside it is refused before a request is made. On a rate limit (HTTP 429) or a model-rejection 400, the orchestrator rotates to the next model in that order; it does not route on capability, cost or task type.
+
+**There is no `auto` value.** Langdock's OpenAI-compatible endpoint returns HTTP 400 `invalid_request_error` for it — verified against the live API on 2026-08-19. Earlier revisions of this README described `auto` routing; that was wrong, and reintroducing `auto` breaks every request. See ADR-006.
 
 See `docs/production_environment.md` for the full security hardening guide.
 
@@ -158,6 +162,8 @@ for the deployment runbook (`docker-compose.yml`, `deploy/systemd/tugpt.service`
 - **Audit log immutability**: `trigger_prevent_audit_log_modification` blocks user-level `UPDATE` and `DELETE` on `public.audit_logs`.
 - **Structured logging**: `@tugpt/observability` provides a `Logger` generating structured JSON records with automatic secret redaction (Bearer tokens, API keys, Supabase keys) in context values. As of PR #2, `err.message` is also sanitized to prevent secret leakage through error messages.
 - **Config validation**: `@tugpt/security` validates environment configuration at startup.
+- **Two flag mechanisms, one of them authoritative**: `is_feature_enabled(org_id, key)` is the only legitimate gate for a customer-facing capability — it ANDs a global row with a per-org row and is changeable at runtime. `packages/feature-flags/src/flags.ts` is a separate, hardcoded, org-blind kill switch that answers for exactly one key (`whatsapp_integration`); it is the in-code half of that switch's dual enforcement, and a new key there would be on or off for every organization at once. Do not add one.
+- **The seeded `global_*` flag rows are inert — do not build on them**: `supabase/seed.sql` inserts four rows named `global_whatsapp_integration`, `global_voice_receptionist`, `global_langdock_orchestrator` and `global_mastra_orchestrator`, all `true`. **No code reads any of them.** The keys production actually queries are `ai_draft_generation` (seeded `false` by migration `20260805000011`) and `whatsapp_integration` — and neither appears in the seed file. The hazard is the naming: three of the four shadow capabilities the product roadmap asks for, so someone building voice or WhatsApp could reasonably reach for a `global_`-prefixed key that already reads `true` and gate a live capability on a row nothing enforces. The seed file is deliberately left as-is; this note is the fix. New capabilities take an unprefixed key and go through `is_feature_enabled`.
 
 ## Current Status
 
@@ -169,7 +175,7 @@ for the deployment runbook (`docker-compose.yml`, `deploy/systemd/tugpt.service`
 - **PR #10** (ESM/CJS Interop Fix): Merged (squash) into main at commit `4a79f02` on Aug 13, 2026. Removed `"type": "module"` from `apps/worker/package.json` to resolve `ERR_REQUIRE_ESM` crash-loop on staging. Internal packages remain CJS; workers execute via `tsx` which handles ESM syntax in CJS mode. Verified on staging: typecheck, lint, test (100/100), build all pass, both workers start cleanly.
 - **PR #13** (Docker Compose deployment): Merged into `main` (merge commit `4092f48`) on Aug 18, 2026. Adds `apps/web/Dockerfile`, `apps/worker/Dockerfile`, `docker-compose.yml`, and a `docker-build` CI job, targeting the VPS deployment described below instead of Vercel.
 - **PR #14** (Vercel cleanup, VPS runbook, ADR-013): Merged into `main` (merge commit `de1fe63`) on Aug 18, 2026, immediately after PR #13. Removes `vercel.json`, rewrites `docs/production_environment.md` §5 and ADR-013 for the real target (`212.227.44.13`), and adds the systemd-to-Docker-Compose cutover plan and pre-deploy security checklist.
-- **Provider simplification** (2026-08-18): TuGPT moved from the three-provider failover chain to Langdock as the sole provider — Logicc cut (cost), Anymize removed (cross-project isolation), model selection set to Langdock's auto routing (never pinned). See [ADR-006](docs/adr/ADR-006-provider-adapter-architecture.md) (rewritten) and [ADR-012](docs/adr/ADR-012-three-provider-failover-chain.md) (superseded). `LogiccAdapter` and `AnymizeAdapter` remain in the repo, unimported by production wiring. Merged into `main` via PR #15 on Aug 18, 2026; `build-and-test` and `docker-build` both green on `main`. Milestone #1 (first end-to-end AI draft in staging) remains gated on the running staging workers' environment being confirmed updated with the live Langdock config, not just the repo.
+- **Provider simplification** (2026-08-18): TuGPT moved from the three-provider failover chain to Langdock as the sole provider — Logicc cut (cost), Anymize removed (cross-project isolation), model selection set to what was then believed to be Langdock's `auto` routing. **That part did not survive contact with the live API**: `auto` returns HTTP 400, verified 2026-08-19, and model selection is now a cheapest-first allowlist with failure-triggered rotation. See [ADR-006](docs/adr/ADR-006-provider-adapter-architecture.md) (rewritten) and [ADR-012](docs/adr/ADR-012-three-provider-failover-chain.md) (superseded). `LogiccAdapter` and `AnymizeAdapter` remain in the repo, unimported by production wiring. Merged into `main` via PR #15 on Aug 18, 2026; `build-and-test` and `docker-build` both green on `main`. Milestone #1 (first end-to-end AI draft in staging) remains gated on the running staging workers' environment being confirmed updated with the live Langdock config, not just the repo.
 - **Job-queue backend pinned** (2026-08-18): [ADR-014](docs/adr/ADR-014-pgmq-production-queue-backend.md) documents PGMQ (the Postgres extension, via Supabase) as the confirmed production queue backend for both `whatsapp_inbound` and `draft_generation`, resolving the "BullMQ/Redis or PgBoss" ambiguity left open in [ADR-007](docs/adr/ADR-007-background-job-abstraction.md). Documentation only, no code changes.
 
 ## Contributing
