@@ -1,5 +1,5 @@
 # Supabase local development configuration for TuGPT
-project_id = "tugpt-app"
+project_id = "tugpt"
 
 [api]
 enabled = true
