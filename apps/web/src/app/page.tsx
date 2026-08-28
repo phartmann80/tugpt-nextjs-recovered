@@ -5,7 +5,7 @@
  * Next.js logo, "To get started, edit the page.tsx file", and a "Deploy Now"
  * button pointing at Vercel. Nobody noticed because nothing linked to it and
  * the app had never been served from a domain anyone would type by hand. The
- * moment tugpt.ai went live it became the first thing a visitor saw, on a
+ * moment the site went live it became the first thing a visitor saw, on a
  * project that had just retired Vercel.
  *
  * There is no landing page to show yet and inventing one here would be scope,

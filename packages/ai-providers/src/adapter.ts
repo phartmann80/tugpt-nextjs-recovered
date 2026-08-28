@@ -1,6 +1,6 @@
 /**
  * @file adapter.ts
- * @description Unified AI Provider Adapter Contract for TuGPT.ai.
+ * @description Unified AI Provider Adapter Contract for TuGPT.
  *
  * STATUS: Provisional (see docs/adr/ADR-006-provider-adapter-architecture.md).
  * This interface currently exposes only `generateCompletion` and covers
