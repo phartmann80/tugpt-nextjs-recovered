@@ -1,4 +1,4 @@
-# TuGPT.ai
+# TuGPT
 
 AI-powered platform built with Next.js 16, React 19, and Supabase. Phase 3A (Secure Inbound WhatsApp Foundation) and Phase 3B (AI Draft Generation) are complete and merged.
 
