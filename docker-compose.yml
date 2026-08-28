@@ -1,6 +1,6 @@
 # docker-compose.yml
 #
-# Production runtime for TuGPT.ai on its dedicated VPS (212.227.44.13).
+# Production runtime for TuGPT on its dedicated VPS (212.227.44.13).
 # See docs/production_environment.md for the deployment runbook.
 #
 # As of the 2026-08-25 rebuild this file IS production. The host was
