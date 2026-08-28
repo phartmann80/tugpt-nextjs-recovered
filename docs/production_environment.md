@@ -1,6 +1,6 @@
-# TuGPT.ai Production Environment & Security Hardening Guide
+# TuGPT Production Environment & Security Hardening Guide
 
-This document describes the environment variable configurations, secret handling, and security boundaries required for deploying the TuGPT.ai platform to production.
+This document describes the environment variable configurations, secret handling, and security boundaries required for deploying the TuGPT platform to production.
 
 ---
 
@@ -19,7 +19,7 @@ Every production environment deployment requires the following variables to be e
 | `LANGDOCK_MODEL` | Pins exactly one model and disables rotation. Kept for deployments predating rotation, and as the escape hatch. Ignored when `LANGDOCK_MODELS` is also set — the more specific variable wins, and the override is logged at boot. Allowed values: `gpt-5-mini`, `gpt-5.1`, `gpt-5.2`, `gpt-5`. Anything else is rejected at worker boot. | Server-side only. Not a secret. |
 | `GATEWAY_API_MASTRA_KEY` | Production Mastra Orchestrator API Key | **SECRET**. Server-side only. |
 | `GATEWAY_API_URL` | Production Mastra Endpoint URL | Server-side only. |
-| `TUGPT_DOMAIN` | Public hostname the dashboard is served on, e.g. `tugpt.ai`. Read by the Caddy reverse proxy only (section 5.4b), and only when the `proxy` compose profile is enabled. | Not a secret. |
+| `TUGPT_DOMAIN` | Public hostname the dashboard is served on. `tugpt.app` since the 2026-08-28 migration (§5.4c). Read by the Caddy reverse proxy only (section 5.4b), and only when the `proxy` compose profile is enabled. | Not a secret. |
 | `IONOS_API_KEY` | IONOS voice API key. **Present but empty on the server as of 2026-08-25** — the account is not configured yet. Nothing reads it at boot, so an empty value is safe; a wrong one would not be caught until something first calls it. | **SECRET**. Server-side only. |
 | `LANGDOCK_IMAGE_*` | Credentials for the Langdock image-generation agent. **No production code reads these names yet.** They are on the server so the values are not lost; whoever wires that agent must read exactly these names rather than inventing new ones. | **SECRET**. Server-side only. |
 | `LANGDOCK_DOCZIP_*` | Credentials for the Langdock doczip agent. Same status and same rule as `LANGDOCK_IMAGE_*`. | **SECRET**. Server-side only. |
@@ -328,7 +328,7 @@ than a build one.
 
 5.3 leaves the app listening on loopback only. A reviewer cannot open it. This adds TLS termination and public routing in front of it.
 
-**On the current host this is already done** — Caddy is running under the `proxy` profile with a Let's Encrypt certificate for `tugpt.ai` and renewal on. The section stays as the reference for how it was set up, what to check, and how it fails.
+**On the current host this is already done** — Caddy is running under the `proxy` profile with a Let's Encrypt certificate for `tugpt.app` and renewal on. The section stays as the reference for how it was set up, what to check, and how it fails.
 
 Caddy rather than nginx: certificates are obtained and renewed from Let's Encrypt automatically, with no certbot and no cron entry to forget. The whole configuration is `deploy/caddy/Caddyfile`, about twenty lines.
 
@@ -344,7 +344,7 @@ This section originally added "and no renewal that can quietly stop working." Th
 
 **Before enabling:**
 
-- [ ] A DNS `A` record (and `AAAA` if the host has IPv6) for the intended hostname points at `212.227.44.13`. Caddy proves control of the name to Let's Encrypt; without working DNS it cannot get a certificate.
+- [ ] A DNS **`A` record only** for the intended hostname points at `212.227.44.13`. Caddy proves control of the name to Let's Encrypt; without working DNS it cannot get a certificate. **Do not add an `AAAA` record** — this host has no IPv6 egress, so an `AAAA` advertises a path Let's Encrypt would try and fail to validate. See §5.4c.
 - [ ] `TUGPT_DOMAIN=<that hostname>` is in `/etc/tugpt/web.env`. If it is missing, Caddy starts and then fails to obtain a certificate for `TUGPT_DOMAIN-is-not-set.invalid` — the name is chosen so the log line names the problem.
 - [ ] `ufw` allows 80 and 443 inbound (5.2 already assumes this). Both are needed: 80 for the ACME challenge and for the HTTP→HTTPS redirect.
 
@@ -380,7 +380,7 @@ The routes behind it, for debugging:
 | `/auth/login` | email + password; honours `?redirect=` |
 | `/api/v1/health` | liveness, unauthenticated by design |
 
-Until 2026-08-24 `/` was the untouched `create-next-app` boilerplate — Next.js logo, "To get started, edit the page.tsx file", and a "Deploy Now" button linking to Vercel. Nothing linked to it and the app had never been served from a domain anyone would type by hand, so nobody had looked. It was the first thing a visitor to tugpt.ai saw.
+Until 2026-08-24 `/` was the untouched `create-next-app` boilerplate — Next.js logo, "To get started, edit the page.tsx file", and a "Deploy Now" button linking to Vercel. Nothing linked to it and the app had never been served from a domain anyone would type by hand, so nobody had looked. It was the first thing a visitor to the site saw.
 
 #### DNS inside the container, and why a renewal can fail silently
 
@@ -397,7 +397,7 @@ cd /opt/tugpt
 set -a; . /etc/tugpt/web.env; set +a
 sh deploy/caddy/check-cert.sh
 # ok    dns   caddy resolves acme-v02.api.letsencrypt.org
-# ok    cert  tugpt.ai valid for 89d
+# ok    cert  tugpt.app valid for 89d
 ```
 
 Invoked as `sh <path>` rather than `./<path>` because the file arrives through the GitHub API, which writes blobs as `0644` — the executable bit does not survive a fresh clone.
@@ -407,7 +407,7 @@ Optional, as root, to be told rather than to remember:
 ```cron
 0 7 * * 1 cd /opt/tugpt && set -a && . /etc/tugpt/web.env && set +a && \
   sh deploy/caddy/check-cert.sh || \
-  logger -t tugpt-cert -p daemon.err "TLS check failed on tugpt.ai"
+  logger -t tugpt-cert -p daemon.err "TLS check failed on tugpt.app"
 ```
 
 Weekly gives roughly four warnings between the first failed renewal and an outage.
@@ -420,6 +420,62 @@ Where `site_url` and the redirect allowlist *do* matter:
 - Confirmation and password-recovery emails. `supabase/config.toml` sets `enable_confirmations = true`, so a newly created reviewer receives a confirmation link built from `site_url`. If that still points at the retired Vercel deployment, the link lands nowhere. Worth fixing when reviewer accounts are created — Supabase configuration, not a repo change.
 
 **On the WhatsApp webhook.** Once this is up, `https://<TUGPT_DOMAIN>/api/v1/webhooks/whatsapp` is publicly reachable, which is what Meta will eventually require. It returns 404 today and keeps returning 404 until `whatsapp_integration` is flipped in `packages/feature-flags/src/flags.ts` — a reviewed code change, per ADR-010 amendment 2. Exposing the path does not enable the feature and does not move it closer to enabled.
+
+### 5.4c Domain migration to tugpt.app (2026-08-28)
+
+**`tugpt.ai` is no longer ours and is to be treated as hostile.** Control of the
+registration was lost. Nothing in this repository, on this host, or in any
+dashboard we own may point at it again. `tugpt.app` is canonical.
+
+**DNS:** `tugpt.app` → `212.227.44.13`, **A record only, no AAAA.** Do not add
+one. The Caddy container pins its own resolvers (§5.4b) but the host itself has
+no IPv6 egress, and an AAAA record would advertise a path Let's Encrypt would
+then try and fail to validate.
+
+**`.app` is on the HSTS preload list.** Browsers refuse plaintext to it
+unconditionally, so there is no degraded-but-reachable state: until the
+certificate issues, the site is simply gone. Watch the ACME log rather than
+assuming.
+
+**The switch itself is one environment variable.** The Caddyfile hardcodes no
+domain — the site address is `{$TUGPT_DOMAIN}`, read from `/etc/tugpt/web.env`:
+
+```bash
+sudo sed -i 's/^TUGPT_DOMAIN=.*/TUGPT_DOMAIN=tugpt.app/' /etc/tugpt/web.env
+grep -c '^TUGPT_DOMAIN=' /etc/tugpt/web.env    # exactly 1
+sudo systemctl restart tugpt.service           # ExecStart carries --profile proxy
+sudo docker logs -f "$(sudo docker ps -qf name=caddy)" 2>&1 | grep -iE 'certificate obtained|error'
+```
+
+Serving the old domain stops by construction: the Caddyfile has a single site
+block and on-demand TLS is not enabled, so any other `Host` gets no certificate
+and no response. There is nothing to remove.
+
+**Acceptance:**
+
+```bash
+curl -fsSI http://tugpt.app/api/v1/health      # 308 -> https
+curl -fsS  https://tugpt.app/api/v1/health     # {"status":"ok",...}
+sudo TUGPT_DOMAIN=tugpt.app sh /opt/tugpt/deploy/caddy/check-cert.sh
+sudo sh /opt/tugpt/deploy/check-host.sh        # 0/0/0
+```
+
+**What lives outside this repository, and must not be forgotten.** The domain
+appears in three places no deploy can reach, and two of them are revocations
+rather than updates:
+
+| Where | Action | Why it is urgent |
+|---|---|---|
+| **Supabase → Auth → URL Configuration** | Site URL `https://tugpt.app`; add redirect `https://tugpt.app/auth/callback`; **delete every `tugpt.ai` entry** | The application hardcodes no origin — `signInWithGoogle` and `resetPassword` take `redirectTo` as a parameter and are not called, and the callback page uses relative paths. **The allowlist in that dashboard is the entire redirect security boundary.** While a `tugpt.ai` entry remains, whoever holds that domain can have Supabase hand them a valid auth code. |
+| **Meta → WhatsApp webhook** | Remove the callback URL and unsubscribe the fields | Meta has been delivering to a domain we do not control, and its owner can answer the verification challenge however they like. Our endpoint returning 404 protects our server, not the traffic. |
+| **`/etc/tugpt/web.env`** | `TUGPT_DOMAIN`, and rotate `WHATSAPP_VERIFY_TOKEN` | The old domain's owner has seen whatever Meta sent, including the verify token if it was ever exchanged. |
+
+**Re-verifying the webhook on `tugpt.app` cannot succeed while
+`whatsapp_integration` is off.** `apps/web/src/app/api/v1/webhooks/whatsapp/route.ts`
+returns 404 from the GET handler before reading `hub.mode`, and Meta requires a
+successful challenge to save a callback URL. Removing the subscription is
+therefore the action available today; re-pointing it belongs to the supervised
+flip, when the flag goes on and verification can actually complete.
 
 ### 5.5 Building and deploying a new release
 
@@ -436,7 +492,7 @@ Then watch it come back:
 ```bash
 docker compose -p tugpt ps
 docker compose -p tugpt logs --tail=50 web whatsapp-worker draft-worker caddy
-curl -fsS https://tugpt.ai/api/v1/health
+curl -fsS https://tugpt.app/api/v1/health
 ```
 
 Since 2026-08-26 the unit passes `--profile proxy`, so a restart recycles Caddy
