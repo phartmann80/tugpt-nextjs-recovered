@@ -29,15 +29,23 @@ rather than assuming it.
 ## 2. Before you start
 
 - [ ] Migrations applied and the harness preflight passes — `docs/server-migrations.md` §4.
-- [ ] Both workers active on the deployed commit:
-      `systemctl is-active tugpt-draft-worker tugpt-whatsapp-worker`
+- [ ] Both workers active on the deployed commit. They are **containers**, not
+      systemd units — this host has no `tugpt-draft-worker` /
+      `tugpt-whatsapp-worker` unit and never had one
+      (`docs/production_environment.md` §5.1):
+
+      ```bash
+      cd /opt/tugpt
+      docker compose -p tugpt ps --status running --services \
+        | grep -E '^(whatsapp-worker|draft-worker)$'   # both must print
+      ```
 - [ ] `LANGDOCK_API_CODE` present in `/etc/tugpt/worker.env`
       (`docs/milestone1-e2e-runbook.md` §6a). Model selection is `LANGDOCK_MODELS` — the ordered
       rotation list, and the recommended setting. `LANGDOCK_MODEL` pins a single model and disables
       rotation; it is the escape hatch, and it is ignored when `LANGDOCK_MODELS` is also set.
       Neither is required: unset, the worker rotates the whole allowlist. See ADR-006. Do not
       assume which is configured — the worker resolves it at boot and says so:
-      `journalctl -u tugpt-draft-worker -n 50 --no-pager | grep 'model order resolved'`.
+      `cd /opt/tugpt && docker compose -p tugpt logs --tail=50 draft-worker | grep 'model order resolved'`.
 - [ ] Each pilot organization has a **live quota period** — a `draft_quota_limits` row whose
       `period_start <= CURRENT_DATE < period_end`. Without one, every job is skipped.
       **It lands in the database as `skip_reason = 'QUOTA_DENIED'`,** not as
@@ -160,7 +168,7 @@ that used to be in this document survived as long as it did.
 | `dead_lettered` / `DRAFT_MALFORMED_RESPONSE` | the provider answered, but not in a shape the orchestrator could parse | `provider_error_detail`; if it repeats, the model or endpoint changed under us |
 | `dead_lettered` / `DRAFT_PROVIDER_EMPTY_OUTPUT` | the provider returned success with no text | usually a content filter or a degenerate prompt; check `ai_draft_configs` |
 | `dead_lettered` / `DRAFT_PROVIDER_OUTPUT_TOO_LONG` | the draft exceeded `ai_draft_configs.max_draft_length` | raise the limit or tighten `response_rules` |
-| `dead_lettered` / `DRAFT_INTERNAL_ERROR` | an unclassified failure inside the worker | `journalctl -u tugpt-draft-worker`; this one is a bug until proven otherwise |
+| `dead_lettered` / `DRAFT_INTERNAL_ERROR` | an unclassified failure inside the worker | `docker compose -p tugpt logs draft-worker`; this one is a bug until proven otherwise |
 | Anything at all in a **different** organization | isolation failure | **disarm now** (§6) |
 
 <!-- outcome-table:end -->
@@ -217,9 +225,17 @@ enough yet even though nothing is failing.
 **Workers:**
 
 ```bash
-systemctl is-active tugpt-draft-worker tugpt-whatsapp-worker
-journalctl -u tugpt-draft-worker --since '1 hour ago' --no-pager | grep -i -E 'error|archiv|dead'
+cd /opt/tugpt
+docker compose -p tugpt ps --status running --services \
+  | grep -E '^(whatsapp-worker|draft-worker)$'   # both must print
+docker compose -p tugpt logs --since 1h draft-worker | grep -i -E 'error|archiv|dead'
 ```
+
+**An empty result from a log command is only good news if the command can
+produce output at all.** `journalctl -u tugpt-draft-worker` — which this section
+used to say — prints nothing on this host, because no such unit exists. Watching
+that for a business day and seeing no errors would have proved nothing, and would
+have read exactly like a clean rollout.
 
 ## 6. Expanding, and stopping
 
