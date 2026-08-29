@@ -6,6 +6,7 @@
 import { Suspense, useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getBrowserClient } from '@/lib/supabase/browser';
+import { APP_CONFIG } from '@/config/locales';
 
 function LoginForm() {
   const router = useRouter();
@@ -59,7 +60,7 @@ function LoginForm() {
     <div className="flex min-h-screen items-center justify-center bg-zinc-50 px-4">
       <div className="w-full max-w-md">
         <h1 className="mb-6 text-center text-2xl font-bold text-zinc-900">
-          TuGPT.ai Login
+          {APP_CONFIG.name} Login
         </h1>
 
         {error && (

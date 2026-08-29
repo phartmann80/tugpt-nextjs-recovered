@@ -58,7 +58,7 @@
 # already has rather than going back to Let's Encrypt.
 
 [Unit]
-Description=TuGPT.ai Docker Compose stack
+Description=TuGPT Docker Compose stack
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target

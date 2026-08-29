@@ -1,5 +1,5 @@
 export const APP_CONFIG = {
-  name: "TuGPT.ai",
+  name: "TuGPT",
   description: "Tu empleado con IA para WhatsApp, llamadas y clientes.",
   primaryLocale: "es" as const,
   secondaryLocale: "en" as const,

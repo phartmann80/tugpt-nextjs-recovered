@@ -2,7 +2,7 @@
 #
 # deploy/caddy/check-cert.sh
 #
-# Catches the two ways TLS on tugpt.ai can fail without anyone noticing until
+# Catches the two ways TLS on tugpt.app can fail without anyone noticing until
 # the site goes down.
 #
 # 1. The Caddy container cannot resolve DNS.
@@ -45,7 +45,7 @@
 #
 #   0 7 * * 1 cd /opt/tugpt && set -a && . /etc/tugpt/web.env && set +a && \
 #     sh deploy/caddy/check-cert.sh || \
-#     logger -t tugpt-cert -p daemon.err "TLS check failed on tugpt.ai"
+#     logger -t tugpt-cert -p daemon.err "TLS check failed on tugpt.app"
 #
 # Weekly is the right cadence: it gives roughly four warnings between the first
 # failed renewal and an outage.

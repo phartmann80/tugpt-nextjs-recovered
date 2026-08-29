@@ -35,7 +35,7 @@
 # own env_file; this line is specifically for build-time interpolation.
 
 [Unit]
-Description=TuGPT.ai web app (Docker Compose, web service only)
+Description=TuGPT web app (Docker Compose, web service only)
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
