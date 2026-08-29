@@ -158,9 +158,15 @@ pnpm exec supabase db push --db-url "$SUPABASE_DB_URL"
 Then restart the workers so they pick up the new code, and verify (§4):
 
 ```bash
-sudo systemctl restart tugpt-draft-worker tugpt-whatsapp-worker
-systemctl is-active tugpt-draft-worker tugpt-whatsapp-worker
+sudo systemctl restart tugpt.service          # recreates the whole compose stack
+docker compose -p tugpt ps --status running --services \
+  | grep -E '^(whatsapp-worker|draft-worker)$'   # both must print
 ```
+
+`tugpt.service` is the only unit on this host; its `ExecStart` is
+`docker compose … up -d --build --remove-orphans`, so a restart is what picks up
+new code. There are no `tugpt-draft-worker` / `tugpt-whatsapp-worker` units —
+see `docs/production_environment.md` §5.1.
 
 ---
 
