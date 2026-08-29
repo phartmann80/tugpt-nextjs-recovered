@@ -26,6 +26,20 @@ INSERT INTO public.feature_flags (organization_id, key, is_enabled, rules)
 VALUES (NULL, 'ai_draft_generation', false, '{}'::jsonb)
 ON CONFLICT DO NOTHING;
 
+
+-- Migration 20260826000001 added a trigger on feature_flags: enabling
+-- ai_draft_generation for an organization requires that organization to have a
+-- draft_quota_limits row covering today. These fixtures enable that flag as
+-- setup for testing something else (RLS / permissions), so they now need the
+-- precondition the product itself needs. The assertions below are unchanged.
+INSERT INTO public.draft_quota_limits (organization_id, period_start, period_end, hard_ceiling)
+VALUES
+  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', date_trunc('month', CURRENT_DATE)::date,
+   (date_trunc('month', CURRENT_DATE) + INTERVAL '1 month')::date, 1000),
+  ('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', date_trunc('month', CURRENT_DATE)::date,
+   (date_trunc('month', CURRENT_DATE) + INTERVAL '1 month')::date, 1000)
+ON CONFLICT DO NOTHING;
+
 -- Ensure org-scoped flag exists for test org
 INSERT INTO public.feature_flags (organization_id, key, is_enabled, rules)
 VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'ai_draft_generation', true, '{}'::jsonb)
