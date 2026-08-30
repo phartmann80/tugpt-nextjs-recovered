@@ -58,12 +58,15 @@ rather than assuming it.
       enables the org flag in one transaction, and a trigger on `feature_flags` refuses to enable
       the flag for an org with no covering period (`P3B17 DRAFT_QUOTA_PERIOD_REQUIRED`). The
       checklist item survives as a *check*, not as a thing to do by hand — see §4.
-- [ ] Each pilot organization has an `ai_draft_configs` row, and it points at that organization's
-      business profile. The worker looks the config up by `(business_profile_id, organization_id)`
-      and takes the job's `business_profile_id` from the job row, so a config that exists but
-      references a different profile id is the same as no config at all.
-      (`business_profiles` is `UNIQUE (organization_id)` — one profile per organization — so this
-      is a stale-id risk, not a which-of-several risk.)
+- [ ] Each pilot organization has an `ai_draft_configs` row. The worker looks the config up by
+      `(business_profile_id, organization_id)`, taking the `business_profile_id` from the job row.
+      **The only reachable failure is that no config row exists** — a config cannot point at
+      another organization's profile, because `ai_draft_configs` carries a composite foreign key on
+      `(business_profile_id, organization_id)` referencing `business_profiles(id, organization_id)`,
+      and `business_profiles` is `UNIQUE (organization_id)`. An earlier version of this checklist
+      described a "stale profile id" risk; the database refuses that write, so there is one thing
+      to check here rather than two. Note the FK is `ON DELETE CASCADE`: deleting the profile takes
+      the config with it, which *is* a way to arrive at no config.
 
       This is not a quality nicety: a missing or mismatched row **dead-letters the job** with
       `DRAFT_INVALID_CONFIG`. It is the most likely way a first pilot produces zero drafts while
@@ -93,9 +96,22 @@ WHERE key = 'ai_draft_generation'
 ORDER BY organization_id NULLS FIRST;
 ```
 
-Expect exactly one row, `organization_id = NULL`, `is_enabled = false`. **If any org row already
-exists and is `true`, stop** — arming will enable that organization the instant you do it. Resolve
-that first.
+Expect the global row, `organization_id = NULL`, `is_enabled = false`.
+
+**Every org row that is already `true` will go live the instant you arm.** So the check is not
+"is there an org row" — §4 can legitimately be run days ahead, and preparing pilot organizations
+early is recommended precisely because it changes nothing while the global row is `false`. The
+check is:
+
+> **Stop unless the enabled org rows are exactly the ones you armed on purpose, and there are no
+> others.**
+
+That requires a list of the organizations you armed deliberately, written down *before* you run
+this query — otherwise you are comparing the output against your memory, which is not a control.
+For a single pilot organization it is one line.
+
+This is not hypothetical. Arming two organizations and then arming globally turns on both, which
+is correct behaviour and a surprise if only one was intended.
 
 ```sql
 -- Arm.
