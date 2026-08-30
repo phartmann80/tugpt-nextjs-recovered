@@ -5,8 +5,10 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { getBrowserClient } from '@/lib/supabase/browser';
+import { useT } from '@/i18n/provider';
 
 export default function LogoutPage() {
+  const t = useT();
   const router = useRouter();
 
   useEffect(() => {
@@ -22,7 +24,7 @@ export default function LogoutPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center">
-      <p className="text-zinc-500">Signing out...</p>
+      <p className="text-zinc-500">{t('auth.logout.pending')}</p>
     </div>
   );
 }

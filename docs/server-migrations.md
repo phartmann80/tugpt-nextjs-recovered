@@ -225,7 +225,7 @@ Those are not reproduced here; do not read extra lines as a problem.
 <!-- schema-gate-sample:start -->
 
 ```
-  [ok]   all 39 migration(s) in this checkout are applied (database has 39, latest 20260826000001)
+  [ok]   all 40 migration(s) in this checkout are applied (database has 40, latest 20260830000001)
   [ok]   20260819000001: failed_jobs.provider_error_detail column — column is selectable
   [ok]   20260819000001: archive_draft_failed_job 4-argument overload (extended error-code allowlist) — signature present, returned P3B07 DRAFT_JOB_NOT_FOUND
   [ok]   database schema matches this checkout
@@ -237,9 +237,11 @@ The count and the latest version above are real values, and
 `apps/worker/tests/server-migrations-doc.test.ts` asserts they match
 `supabase/migrations` in this checkout — which is the only reason this block
 is still true. It has now gone stale twice and been caught by that test both
-times: it said 37 / `20260819000002` until 2026-08-25, and 38 /
-`20260819000003` until `20260826000001` (the draft-quota-period lifecycle)
-landed. Neither correction was noticed by a human reading the document.
+times, and mechanically a third: it said 37 / `20260819000002` until
+2026-08-25, 38 / `20260819000003` until `20260826000001` (the draft-quota-period
+lifecycle) landed, and 39 / `20260826000001` until `20260830000001` (the
+organization locale column) landed. No correction has ever been noticed by a
+human reading the document.
 
 A stale database aborts with `REFUSING TO RUN`, followed by:
 

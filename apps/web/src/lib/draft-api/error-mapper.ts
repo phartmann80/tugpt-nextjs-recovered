@@ -23,6 +23,19 @@ const UNKNOWN_ERROR: MappedError = {
 };
 
 /**
+ * Every `code` this module can put on the wire.
+ *
+ * Exported so `apps/web/src/i18n/dictionaries.test.ts` can assert the
+ * dictionaries have a translation for each one. Without that, adding a SQLSTATE
+ * here ships an English sentence into a Spanish dashboard and nothing fails.
+ */
+export function knownDraftErrorCodes(): string[] {
+  return Array.from(
+    new Set([...Object.values(ERROR_MAP).map((e) => e.code), UNKNOWN_ERROR.code])
+  );
+}
+
+/**
  * Map a Supabase RPC error to an HTTP status code and sanitized message.
  * Inspects the error's `code` field for SQLSTATE codes (P3B01-P3B05).
  * Unknown errors default to HTTP 500 with a generic message.
