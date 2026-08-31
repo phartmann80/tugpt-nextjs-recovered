@@ -23,6 +23,21 @@ export interface DraftConfig {
   readonly responseRules: string;
   readonly tone: string;
   readonly maxDraftLength: number;
+  /**
+   * The owning organization's `organizations.locale`, which decides the
+   * language of the prompt scaffolding and the non-negotiable rules.
+   *
+   * Typed `string`, not a union, on purpose: this package would otherwise have
+   * to depend on `@tugpt/database` for `OrganizationLocale`, and the value
+   * arriving here has already crossed a database boundary, so a union would be
+   * a claim rather than a guarantee. `scaffoldingFor` coerces anything it
+   * cannot render to Spanish, and `apps/worker/tests` asserts that the set it
+   * can render is exactly `ORGANIZATION_LOCALES`.
+   *
+   * Optional so that a caller written before 2026-08-31 still produces a valid
+   * Spanish prompt rather than failing to compile in a hurry.
+   */
+  readonly locale?: string;
 }
 
 /** Request for draft generation. */
