@@ -3,8 +3,18 @@ name: CI
 on:
   push:
     branches: [ main ]
+  # DELIBERATELY UNFILTERED. A `branches:` filter here does not make a pull
+  # request fail its gate — it removes the gate, silently, with no red check to
+  # notice. That happened on 2026-08-30: PR #54 was opened against a feature
+  # branch to keep its diff to one commit, and produced zero check runs. It was
+  # only tested because an unrelated force-push happened to fire `synchronize`.
+  #
+  # Retargeting a pull request at `main` does not rescue it either: changing a
+  # base fires `edited`, which is not one of the default trigger types.
+  #
+  # `push` stays filtered to `main` so a branch is not built twice.
+  # `apps/worker/tests/ci-triggers-every-pull-request.test.ts` keeps this open.
   pull_request:
-    branches: [ main ]
 
 jobs:
   build-and-test:
