@@ -1,4 +1,4 @@
--- TuGPT.ai pgTAP Invitations and Organization Ownership Test Suite
+-- TuGPT pgTAP Invitations and Organization Ownership Test Suite
 -- Runs inside a single transaction that is rolled back at the end.
 
 BEGIN;
@@ -10,14 +10,14 @@ SELECT plan(10);
 
 -- Seed Users in auth.users
 INSERT INTO auth.users (id, email, raw_user_meta_data) VALUES
-  ('11111111-1111-1111-1111-111111111111', 'owner_a@tugpt.ai', '{"full_name": "Owner A"}'),
-  ('22222222-2222-2222-2222-222222222222', 'admin_b@tugpt.ai', '{"full_name": "Admin B"}'),
-  ('33333333-3333-3333-3333-333333333333', 'invitee_c@tugpt.ai', '{"full_name": "Invitee C"}'),
-  ('44444444-4444-4444-4444-444444444444', 'rollback_d@tugpt.ai', '{"full_name": "Rollback D"}')
+  ('11111111-1111-1111-1111-111111111111', 'owner_a@example.com', '{"full_name": "Owner A"}'),
+  ('22222222-2222-2222-2222-222222222222', 'admin_b@example.com', '{"full_name": "Admin B"}'),
+  ('33333333-3333-3333-3333-333333333333', 'invitee_c@example.com', '{"full_name": "Invitee C"}'),
+  ('44444444-4444-4444-4444-444444444444', 'rollback_d@example.com', '{"full_name": "Rollback D"}')
 ON CONFLICT (id) DO NOTHING;
 
 -- Seed Profiles
--- User D ('rollback_d@tugpt.ai') is seeded as a profile only and is
+-- User D ('rollback_d@example.com') is seeded as a profile only and is
 -- deliberately NOT added to organization_members below. Test 7 needs a
 -- user who genuinely has no membership row before the test runs, so the
 -- rollback assertion (Test 7b) proves the earlier INSERT was undone rather
@@ -25,10 +25,10 @@ ON CONFLICT (id) DO NOTHING;
 -- already has real membership from Test 3's accept_invitation() call,
 -- which made it unsuitable as the Test 7 fixture).
 INSERT INTO public.profiles (id, email, full_name) VALUES
-  ('11111111-1111-1111-1111-111111111111', 'owner_a@tugpt.ai', 'Owner A'),
-  ('22222222-2222-2222-2222-222222222222', 'admin_b@tugpt.ai', 'Admin B'),
-  ('33333333-3333-3333-3333-333333333333', 'invitee_c@tugpt.ai', 'Invitee C'),
-  ('44444444-4444-4444-4444-444444444444', 'rollback_d@tugpt.ai', 'Rollback D')
+  ('11111111-1111-1111-1111-111111111111', 'owner_a@example.com', 'Owner A'),
+  ('22222222-2222-2222-2222-222222222222', 'admin_b@example.com', 'Admin B'),
+  ('33333333-3333-3333-3333-333333333333', 'invitee_c@example.com', 'Invitee C'),
+  ('44444444-4444-4444-4444-444444444444', 'rollback_d@example.com', 'Rollback D')
 ON CONFLICT (id) DO NOTHING;
 
 -- Seed Organizations
@@ -46,19 +46,19 @@ ON CONFLICT (organization_id, user_id) DO NOTHING;
 -- =============================================================================
 -- TEST 1: Wrong email rejection
 -- =============================================================================
--- Seed an invitation for wrong_user@tugpt.ai
+-- Seed an invitation for wrong_user@example.com
 INSERT INTO public.organization_invitations (id, organization_id, email, role, token_hash, invited_by, expires_at)
 VALUES (
   'e1e1e1e1-e1e1-e1e1-e1e1-e1e1e1e1e1e1',
   'd1d1d1d1-d1d1-d1d1-d1d1-d1d1d1d1d1d1',
-  'wrong_user@tugpt.ai',
+  'wrong_user@example.com',
   'agent',
   'tok_wrong_email_123',
   '11111111-1111-1111-1111-111111111111',
   NOW() + INTERVAL '1 day'
 );
 
--- Try to accept with token as User C ('invitee_c@tugpt.ai')
+-- Try to accept with token as User C ('invitee_c@example.com')
 SELECT set_config('request.jwt.claims', '{"sub":"33333333-3333-3333-3333-333333333333","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 
@@ -78,7 +78,7 @@ INSERT INTO public.organization_invitations (id, organization_id, email, role, t
 VALUES (
   'e2e2e2e2-e2e2-e2e2-e2e2-e2e2e2e2e2e2',
   'd1d1d1d1-d1d1-d1d1-d1d1-d1d1d1d1d1d1',
-  'invitee_c@tugpt.ai',
+  'invitee_c@example.com',
   'agent',
   'tok_expired_123',
   '11111111-1111-1111-1111-111111111111',
@@ -104,7 +104,7 @@ INSERT INTO public.organization_invitations (id, organization_id, email, role, t
 VALUES (
   'e3e3e3e3-e3e3-e3e3-e3e3-e3e3e3e3e3e3',
   'd1d1d1d1-d1d1-d1d1-d1d1-d1d1d1d1d1d1',
-  'invitee_c@tugpt.ai',
+  'invitee_c@example.com',
   'agent',
   'tok_valid_123',
   '11111111-1111-1111-1111-111111111111',

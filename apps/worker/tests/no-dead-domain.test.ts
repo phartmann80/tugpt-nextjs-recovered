@@ -64,6 +64,16 @@ const SKIP_DIRS = new Set([
 /**
  * Files that may still contain it, and why. Every entry is a standing
  * instruction or a repository rule, not a convenience.
+ *
+ * Both survivors are files nobody is allowed to edit, and in both the hit is a
+ * header comment naming the product — not a hostname anything resolves.
+ *
+ * There were ten entries. The other eight were fixture email addresses, parked
+ * here on 2026-08-28 because the files were being modified on PR #47 and
+ * rebasing a migration PR mid-review to change test data is the wrong trade.
+ * They were changed to `example.com` on 2026-08-31 and their exemptions
+ * deleted with them. An exemption list that only grows stops being a list of
+ * exceptions and becomes the rule.
  */
 const ALLOWED = new Map<string, string>([
   [
@@ -76,42 +86,6 @@ const ALLOWED = new Map<string, string>([
     'An applied migration. docs/production_environment.md section 7: never edit a ' +
       'migration that has been applied — the CLI keys the ledger on the version ' +
       'timestamp and would not notice the change. Header comment only.',
-  ],
-  [
-    'supabase/tests/database/invitations_and_ownership.test.sql',
-    'pgTAP fixture emails and a header comment. Scheduled for the follow-up PR ' +
-      'after #47 merges — this file is modified there, and rebasing a migration ' +
-      'PR mid-review to change fixture addresses is the wrong trade. They become ' +
-      'example.com (RFC 2606), not tugpt.app: a real domain in a fixture is the ' +
-      'underlying defect, and swapping one for another repeats it.',
-  ],
-  [
-    'supabase/tests/database/rls_adversarial.test.sql',
-    'Same as above — fixture emails and a header comment.',
-  ],
-  [
-    'supabase/tests/database/phase3b_permissions.test.sql',
-    'Fixture emails. Modified on PR #47; deferred to the follow-up.',
-  ],
-  [
-    'supabase/tests/database/phase3b_feature_flag_rls.test.sql',
-    'Fixture emails. Modified on PR #47; deferred to the follow-up.',
-  ],
-  [
-    'supabase/tests/database/phase3b_integrity.test.sql',
-    'Fixture emails. Deferred to the follow-up for consistency with its siblings.',
-  ],
-  [
-    'supabase/tests/database/draft_attribution_and_audit.test.sql',
-    'Fixture emails. Deferred to the follow-up for consistency with its siblings.',
-  ],
-  [
-    'apps/web/src/app/api/v1/routes.test.ts',
-    'Fixture email addresses in unit-test mocks. Deferred to the follow-up.',
-  ],
-  [
-    'packages/auth/src/service.test.ts',
-    'Fixture email addresses in unit-test mocks. Deferred to the follow-up.',
   ],
 ]);
 
@@ -175,10 +149,15 @@ describe('the dead domain does not come back', () => {
     const offenders = guardedFiles()
       .filter(isTextish)
       .filter((rel) => !ALLOWED.has(rel))
-      // This file necessarily contains every spelling — they are the positive
-      // controls above. Exempting it by path, not by a blanket *.test.ts rule,
-      // so any other test that reintroduces the domain still fails.
-      .filter((rel) => rel !== 'apps/worker/tests/no-dead-domain.test.ts')
+      // These two necessarily contain the dead domain: it is the subject of
+      // their positive controls. Exempted by exact path, not by a blanket
+      // *.test.ts rule, so any other test that reintroduces the domain still
+      // fails — which is how the pgTAP fixtures were caught in the first place.
+      .filter(
+        (rel) =>
+          rel !== 'apps/worker/tests/no-dead-domain.test.ts' &&
+          rel !== 'apps/worker/tests/fixture-emails-are-reserved.test.ts'
+      )
       .filter((rel) => {
         try {
           return DEAD_DOMAIN.test(readFileSync(path.join(REPO_ROOT, rel), 'utf8'));

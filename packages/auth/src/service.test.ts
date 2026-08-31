@@ -23,7 +23,7 @@ function createMockSupabase(memberships: Array<{
     __memberSelect: memberSelect,
     auth: {
       getUser: vi.fn().mockResolvedValue({
-        data: { user: { id: 'user-1', email: 'user@tugpt.ai', user_metadata: {} } },
+        data: { user: { id: 'user-1', email: 'user@example.com', user_metadata: {} } },
         error: null,
       }),
       signInWithOAuth: vi.fn(),
@@ -51,7 +51,7 @@ function createMockSupabase(memberships: Array<{
           single: vi.fn().mockResolvedValue({
             data: {
               id: 'user-1',
-              email: 'user@tugpt.ai',
+              email: 'user@example.com',
               full_name: 'Test User',
               avatar_url: null,
             },

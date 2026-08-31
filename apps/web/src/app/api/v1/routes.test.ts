@@ -52,7 +52,7 @@ describe('API v1 Auth Session Route', () => {
   it('returns authenticated user session and validated active tenant', async () => {
     mockGetCurrentUser.mockResolvedValueOnce({
       id: 'user-1',
-      email: 'user@tugpt.ai',
+      email: 'user@example.com',
       fullName: 'Test User',
       avatarUrl: null,
     });
@@ -100,7 +100,7 @@ describe('API v1 Organizations Route', () => {
   });
 
   it('returns 200 with active tenant and organizations list for authorized user', async () => {
-    const mockUser = { id: 'user-1', email: 'user@tugpt.ai' };
+    const mockUser = { id: 'user-1', email: 'user@example.com' };
     const mockTenant = { organizationId: 'org-1', organizationName: 'Org One', role: 'owner' };
     const mockOrgsList = [mockTenant];
 
