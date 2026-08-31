@@ -21,6 +21,14 @@ export const en: Dictionary = {
   'common.previous': 'Previous',
   'common.next': 'Next',
 
+  'shell.skipToContent': 'Skip to content',
+  'shell.primaryNavLabel': 'Primary navigation',
+  'shell.organizationLabel': 'Organization',
+  'shell.organizationUnknown': 'Organization unavailable',
+  'shell.signOut': 'Sign out',
+
+  'nav.drafts': 'Drafts',
+
   'auth.login.title': 'Sign in to {app}',
   'auth.login.email': 'Email',
   'auth.login.emailPlaceholder': 'you@example.com',
