@@ -1,4 +1,10 @@
-import type { TypedSupabaseClient, OrganizationRole, Profile } from '@tugpt/database';
+import type {
+  TypedSupabaseClient,
+  OrganizationRole,
+  OrganizationLocale,
+  Profile,
+} from '@tugpt/database';
+import { normalizeOrganizationLocale } from '@tugpt/database';
 
 export interface AuthUser {
   id: string;
@@ -11,6 +17,15 @@ export interface TenantContext {
   organizationId: string;
   organizationName: string;
   role: OrganizationRole;
+  /**
+   * The language this organization's dashboard renders in (ADR-017).
+   *
+   * It rides on the tenant context rather than being fetched separately
+   * because it is resolved from the same row, in the same round trip, by the
+   * same membership check. A second query would be a second chance to
+   * disagree about which organization is active.
+   */
+  locale: OrganizationLocale;
 }
 
 export class AuthService {
@@ -136,7 +151,7 @@ export class AuthService {
   async getUserOrganizations(userId: string): Promise<TenantContext[]> {
     const { data, error } = await this.supabase
       .from('organization_members')
-      .select('organization_id, role, organizations!inner(id, name, deleted_at)')
+      .select('organization_id, role, organizations!inner(id, name, locale, deleted_at)')
       .eq('user_id', userId);
 
     if (error || !data) return [];
@@ -144,7 +159,16 @@ export class AuthService {
     type QueryRow = {
       organization_id: string;
       role: OrganizationRole;
-      organizations: { id: string; name: string; deleted_at: string | null } | null;
+      organizations: {
+        id: string;
+        name: string;
+        // Read as `unknown` on purpose. The column is constrained to ('es','en')
+        // and typed as a closed union, but this is the boundary where a value
+        // the database chose becomes a value the UI has to render, and a
+        // rendering path is the wrong place to discover the union was wrong.
+        locale?: unknown;
+        deleted_at: string | null;
+      } | null;
     };
 
     const rows = data as unknown as QueryRow[];
@@ -155,6 +179,7 @@ export class AuthService {
         organizationId: m.organizations!.id,
         organizationName: m.organizations!.name,
         role: m.role,
+        locale: normalizeOrganizationLocale(m.organizations!.locale),
       }));
   }
 

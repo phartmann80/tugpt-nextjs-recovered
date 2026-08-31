@@ -1,3 +1,5 @@
+import type { OrganizationLocale } from './locales';
+
 export type OrganizationRole = 'owner' | 'admin' | 'manager' | 'agent' | 'viewer';
 export type InvitationStatus = 'pending' | 'accepted' | 'declined' | 'expired';
 
@@ -6,7 +8,13 @@ export interface Profile {
   email: string;
   full_name: string | null;
   avatar_url: string | null;
-  preferred_locale: 'es' | 'en';
+  /**
+   * Reserved for a future per-user override. Nothing reads it — the dashboard
+   * resolves language from `Organization.locale` (ADR-017). Constrained in the
+   * database as of 20260830000001, so this union is now enforced rather than
+   * merely asserted.
+   */
+  preferred_locale: OrganizationLocale;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -17,6 +25,8 @@ export interface Organization {
   name: string;
   slug: string;
   logo_url: string | null;
+  /** Language the dashboard renders in for this organization. See ADR-017. */
+  locale: OrganizationLocale;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -263,7 +273,11 @@ export interface Database {
       };
       organizations: {
         Row: Organization;
-        Insert: Omit<Organization, 'id' | 'created_at' | 'updated_at'> & { id?: string; created_at?: string; updated_at?: string };
+        // `locale` is optional on insert because the column carries a default
+        // ('es'). Requiring it here would force every caller to name a language
+        // it does not care about, and the one value they would all pass is the
+        // one the database already supplies.
+        Insert: Omit<Organization, 'id' | 'created_at' | 'updated_at' | 'locale'> & { id?: string; created_at?: string; updated_at?: string; locale?: OrganizationLocale };
         Update: Partial<Organization>;
       };
       organization_members: {

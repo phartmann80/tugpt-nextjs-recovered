@@ -36,11 +36,16 @@ because fixtures went red and a second, looser sweep was run.
 2. **`apps/web/src/config/locales.ts` (`APP_CONFIG.name`) is the single source of
    the product name in the web application.** Components read it. They do not
    spell it. `apps/web/tests/app-config.test.ts` pins both `APP_CONFIG.name` and
-   the root `metadata.title` to `TuGPT`, so the browser tab cannot drift from the
+   the root metadata title to `TuGPT`, so the browser tab cannot drift from the
    config the way it did before. That test does not — and cannot cheaply —
    prove no component anywhere holds its own copy; what catches a copy carrying
    the *dead* domain is the guard in point 4, and what catches one carrying a
    live-but-stale name is review.
+
+   *Amended 2026-08-30 by ADR-017.* The layout now exports `generateMetadata()`
+   rather than a static `metadata` object, because the page description became a
+   translated string. The test pins `generateMetadata().title`. The guarantee is
+   unchanged; only the export it names.
 3. **The domain is deployment configuration, not identity.** `TUGPT_DOMAIN` in
    `/etc/tugpt/web.env` is the only place the deployed hostname is written. No
    repository file hardcodes it. Changing where TuGPT is served must never
