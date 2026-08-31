@@ -43,7 +43,7 @@ INSERT INTO auth.users (
   is_super_admin, confirmation_token, recovery_token, email_change_token_new, email_change
 ) VALUES (
   '00000000-0000-0000-0000-000000000000', '44444444-4444-4444-4444-444444444444',
-  'authenticated', 'authenticated', 'reviewer@tugpt.ai', '', '2026-01-01 00:00:00',
+  'authenticated', 'authenticated', 'reviewer@example.com', '', '2026-01-01 00:00:00',
   '2026-01-01 00:00:00', '2026-01-01 00:00:00', '{}', '{}', false, '', '', '', ''
 ) ON CONFLICT (id) DO NOTHING;
 

@@ -112,7 +112,7 @@ describe('Next.js 16 Proxy Execution', () => {
   it('allows authenticated users with valid claims to access protected routes', async () => {
     mockGetClaims.mockResolvedValueOnce({
       data: {
-        claims: { sub: 'user-1', email: 'test@test.com', aud: 'authenticated' },
+        claims: { sub: 'user-1', email: 'test@example.com', aud: 'authenticated' },
         header: {},
         signature: new Uint8Array(),
       },
