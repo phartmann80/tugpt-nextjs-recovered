@@ -81,6 +81,41 @@ describe('whatsapp-signature', () => {
     expect(verifySignature(largeBody, sig, appSecret)).toBe(true);
   });
 
+  // S11-S14: a blank app secret must never verify anything.
+  //
+  // These are the positive controls for the 2026-08-31 change. Before it, every
+  // one of them returned TRUE: the caller passed `process.env.X || ''`, an
+  // unconfigured server keyed the HMAC on the empty string, and an attacker who
+  // knows the algorithm — it is documented by Meta — could sign any payload.
+  // The endpoint was gated only by a feature flag that is off, which is not a
+  // security control, and was one flip away from being the whole defence.
+  describe('a blank app secret', () => {
+    it('rejects a signature computed with the empty secret', () => {
+      const sig = sign(body, '');
+      expect(verifySignature(body, sig, '')).toBe(false);
+    });
+
+    it('rejects a signature computed with a whitespace-only secret', () => {
+      // The shape a real misconfiguration takes: a quoted empty value in an env
+      // file, or a here-doc that kept its indentation.
+      const sig = sign(body, '   ');
+      expect(verifySignature(body, sig, '   ')).toBe(false);
+    });
+
+    it('rejects even a well-formed signature when the secret is blank', () => {
+      // Nothing about the *header* is wrong here — correct prefix, 64 hex
+      // characters. The refusal is about the key, and about nothing else.
+      const sig = sign(body, appSecret);
+      expect(verifySignature(body, sig, '')).toBe(false);
+    });
+
+    it('still verifies normally once a real secret is given', () => {
+      // The check must refuse blanks without refusing anything else. Without
+      // this line the whole suite would pass with `return false` at the top.
+      expect(verifySignature(body, sign(body, appSecret), appSecret)).toBe(true);
+    });
+  });
+
   // extractSignature tests
   it('extracts signature from headers', () => {
     const headers = new Headers();
