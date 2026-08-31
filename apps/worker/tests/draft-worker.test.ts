@@ -984,3 +984,114 @@ describe('DraftWorker', () => {
     consoleErrorSpy.mockRestore();
   });
 });
+
+describe('the organization locale reaches the prompt', () => {
+  /**
+   * 2026-08-31. `prompt-builder` learned to write in the organization's
+   * language; this is the half that tells it which one. Before it, the prompt
+   * builder had no locale to read and every organization got Spanish
+   * scaffolding regardless of `organizations.locale`.
+   *
+   * The lookup is deliberately unable to fail a job: a draft is not worth
+   * losing over a language, and Spanish is a complete, correct prompt for the
+   * product's default. Two of the tests below are about that, because
+   * "degrades to the default" is a claim that is only worth what its test is.
+   */
+
+  function clientWithOrganization(
+    organizations: { data: Record<string, unknown> | null; error?: { code: string; message: string } | null } | undefined
+  ): SupabaseClient {
+    const rpcConfig: MockRpcConfig = {
+      is_feature_enabled: { data: true, error: null },
+      reserve_draft_usage: { data: { status: 'NEWLY_RESERVED', reason: null }, error: null },
+      store_draft: { data: MOCK_JOB_ID, error: null },
+      delete_draft_generation_job: { data: true, error: null },
+    };
+    const queryConfig: MockQueryConfig = {
+      draft_generation_jobs: { filters: { id: MOCK_JOB_ID }, data: MOCK_JOB_ROW },
+      messages: { filters: { id: MOCK_SOURCE_MESSAGE_ID }, data: { body: MOCK_SOURCE_TEXT } },
+      ai_draft_configs: {
+        filters: { business_profile_id: MOCK_BUSINESS_PROFILE_ID },
+        data: MOCK_DRAFT_CONFIG,
+      },
+    };
+    if (organizations) {
+      queryConfig.organizations = {
+        filters: {},
+        data: organizations.data,
+        error: organizations.error ?? null,
+      };
+    }
+    return createMockClient(rpcConfig, queryConfig);
+  }
+
+  async function localeSentToProvider(
+    organizations: Parameters<typeof clientWithOrganization>[0]
+  ): Promise<unknown> {
+    const client = clientWithOrganization(organizations);
+    const orchestrator = createMockOrchestrator('success');
+    const worker = new DraftWorker(
+      client,
+      orchestrator as unknown as { generateDraft: (req: unknown) => Promise<unknown> },
+      { pollIntervalMs: 100, visibilityTimeoutSeconds: 30 }
+    );
+
+    await (worker as unknown as { processJob: (job: unknown) => Promise<void> }).processJob(
+      MOCK_QUEUE_MESSAGE
+    );
+
+    const call = orchestrator.generateDraft.mock.calls[0];
+    expect(call, 'the orchestrator was never called').toBeDefined();
+    return (call[0] as { config: { locale?: unknown } }).config.locale;
+  }
+
+  it('sends the organization locale through to the draft request', async () => {
+    expect(await localeSentToProvider({ data: { locale: 'en' } })).toBe('en');
+  });
+
+  it('sends Spanish for a Spanish organization', async () => {
+    expect(await localeSentToProvider({ data: { locale: 'es' } })).toBe('es');
+  });
+
+  it('falls back to Spanish when the organization row cannot be read', async () => {
+    // Row deleted mid-job, RLS surprise, transient failure. Not a reason to
+    // dead-letter a draft.
+    expect(
+      await localeSentToProvider({ data: null, error: { code: 'PGRST116', message: 'not found' } })
+    ).toBe('es');
+  });
+
+  it('falls back to Spanish when there is no organizations row at all', async () => {
+    expect(await localeSentToProvider(undefined)).toBe('es');
+  });
+
+  it('normalizes a locale the product cannot render', async () => {
+    // A value that got past the CHECK constraint — a hand-run UPDATE, a
+    // constraint dropped and not restored. The prompt builder would fall back
+    // anyway; normalizing here means the value never travels.
+    expect(await localeSentToProvider({ data: { locale: 'pt-BR' } })).toBe('es');
+    expect(await localeSentToProvider({ data: { locale: null } })).toBe('es');
+  });
+
+  it('still completes the draft when the locale lookup fails', async () => {
+    // The property that matters more than any of the above: a language lookup
+    // must not be able to cost a draft.
+    const client = clientWithOrganization({
+      data: null,
+      error: { code: 'PGRST116', message: 'not found' },
+    });
+    const orchestrator = createMockOrchestrator('success');
+    const worker = new DraftWorker(
+      client,
+      orchestrator as unknown as { generateDraft: (req: unknown) => Promise<unknown> },
+      { pollIntervalMs: 100, visibilityTimeoutSeconds: 30 }
+    );
+
+    await (worker as unknown as { processJob: (job: unknown) => Promise<void> }).processJob(
+      MOCK_QUEUE_MESSAGE
+    );
+
+    const rpcCalls = (client as unknown as { rpc: { mock: { calls: unknown[] } } }).rpc.mock.calls;
+    expect(rpcCalls.find((c: unknown[]) => c[0] === 'store_draft')).toBeDefined();
+  });
+});

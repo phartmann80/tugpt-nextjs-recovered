@@ -18,6 +18,7 @@ import { Logger } from '@tugpt/observability';
 import { DraftPgmqAdapter } from './draft-queue-adapter.js';
 import { DraftOrchestrator } from '@tugpt/ai-orchestration';
 import type { DraftRequest, DraftConfig } from '@tugpt/ai-orchestration';
+import { DEFAULT_ORGANIZATION_LOCALE, normalizeOrganizationLocale } from '@tugpt/database';
 import type { ProviderErrorCategory } from '@tugpt/ai-providers';
 import {
   mapProviderErrorToDbCode,
@@ -431,7 +432,36 @@ export class DraftWorker {
       responseRules: data.response_rules,
       tone: data.tone,
       maxDraftLength: data.max_draft_length,
+      locale: await this.loadOrganizationLocale(organizationId),
     };
+  }
+
+  /**
+   * The organization's dashboard language, which is also its prompt language.
+   *
+   * A second query rather than a join. `ai_draft_configs` has no foreign key to
+   * `organizations` that PostgREST would embed, and one more round trip on a
+   * path that is about to spend seconds inside a provider call is not worth
+   * arranging one for.
+   *
+   * Never throws, and never returns null. A draft is not worth failing over a
+   * language lookup: Spanish is the product default and a complete, correct
+   * prompt for every organization that exists. The cost of guessing wrong is a
+   * prompt in the wrong language, which the guardrail's "reply in the
+   * customer's language" rule largely absorbs; the cost of throwing is a
+   * dead-lettered job.
+   */
+  private async loadOrganizationLocale(organizationId: string): Promise<string> {
+    const { data, error } = await this.client
+      .from('organizations')
+      .select('locale')
+      .eq('id', organizationId)
+      .single();
+
+    if (error || !data) {
+      return DEFAULT_ORGANIZATION_LOCALE;
+    }
+    return normalizeOrganizationLocale(data.locale);
   }
 
   private async reserveQuota(jobId: string): Promise<{ status: string; reason: string | null }> {
