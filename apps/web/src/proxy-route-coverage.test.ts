@@ -31,11 +31,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { existsSync, readdirSync, statSync } from 'node:fs';
-import path from 'node:path';
+import { existsSync } from 'node:fs';
 import { classifyRoute, type RouteType } from './proxy';
-
-type RouteKind = 'page' | 'api';
+import { APP_DIR, discoverRoutes, type RouteKind } from '../tests/support/app-routes';
 
 interface RouteExpectation {
   path: string;
@@ -80,6 +78,9 @@ const ROUTES: RouteExpectation[] = [
     type: 'protected',
     why: 'Reviewer inbox. The proxy is the only gate on the page shell.',
   },
+  // No entry for /dashboard itself: `dashboard/layout.tsx` wraps the pages
+  // below it and has no URL of its own. If a `dashboard/page.tsx` is ever
+  // added, the discovery test below fails until it is classified here.
   {
     path: '/dashboard/drafts/[draftId]',
     kind: 'page',
@@ -159,43 +160,6 @@ const ROUTES: RouteExpectation[] = [
     why: 'Handler authenticates; RLS scopes revisions to the draft owner org.',
   },
 ];
-
-/**
- * Walk the app router directory and return every routable path, derived the
- * way Next derives it: a directory containing page.tsx or route.ts is a route.
- * Route groups `(name)` contribute no segment; `_private` folders are not
- * routable.
- */
-function discoverRoutes(appDir: string): Array<{ path: string; kind: RouteKind }> {
-  const found: Array<{ path: string; kind: RouteKind }> = [];
-
-  function walk(dir: string, segments: string[]): void {
-    const entries = readdirSync(dir);
-
-    for (const entry of entries) {
-      if (entry === 'page.tsx' || entry === 'route.ts') {
-        const routePath = '/' + segments.join('/');
-        found.push({
-          path: segments.length === 0 ? '/' : routePath,
-          kind: entry === 'route.ts' ? 'api' : 'page',
-        });
-      }
-    }
-
-    for (const entry of entries) {
-      if (entry.startsWith('_') || entry.startsWith('.')) continue;
-      const full = path.join(dir, entry);
-      if (!statSync(full).isDirectory()) continue;
-      const isRouteGroup = entry.startsWith('(') && entry.endsWith(')');
-      walk(full, isRouteGroup ? segments : [...segments, entry]);
-    }
-  }
-
-  walk(appDir, []);
-  return found;
-}
-
-const APP_DIR = path.join(process.cwd(), 'src', 'app');
 
 describe('proxy route classification coverage', () => {
   it('finds the app router directory (guards against a cwd change breaking these tests silently)', () => {

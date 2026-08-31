@@ -33,6 +33,14 @@ export const es = {
   'common.previous': 'Anterior',
   'common.next': 'Siguiente',
 
+  'shell.skipToContent': 'Saltar al contenido',
+  'shell.primaryNavLabel': 'Navegación principal',
+  'shell.organizationLabel': 'Organización',
+  'shell.organizationUnknown': 'Organización no disponible',
+  'shell.signOut': 'Cerrar sesión',
+
+  'nav.drafts': 'Borradores',
+
   'auth.login.title': 'Iniciar sesión en {app}',
   'auth.login.email': 'Correo electrónico',
   'auth.login.emailPlaceholder': 'usted@ejemplo.com',
