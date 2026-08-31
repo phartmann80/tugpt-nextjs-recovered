@@ -3,6 +3,17 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 /**
  * Verifies a Meta webhook signature using HMAC-SHA256.
  *
+ * A blank `appSecret` — unset, empty, or whitespace-only — always returns
+ * false. It is the one input that would otherwise make this function *more*
+ * permissive the less it is given: HMAC keyed on the empty string is a
+ * signature any caller can compute, so an unconfigured server would have
+ * accepted every forged request as authentic. "No secret" is not a weak key,
+ * it is a published one, and the only safe answer to it is no.
+ *
+ * That refusal belongs here rather than only in the caller. This function is
+ * exported from `@tugpt/security`; the next caller to appear will pass whatever
+ * it read from the environment, and will not think about this case either.
+ *
  * @param rawBody - The raw request body bytes
  * @param signatureHeader - The value of the X-Hub-Signature-256 header (format: "sha256=<hex>")
  * @param appSecret - The WhatsApp App Secret stored as a server-side env var
@@ -14,6 +25,10 @@ export function verifySignature(
   appSecret: string
 ): boolean {
   if (!signatureHeader) {
+    return false;
+  }
+
+  if (!appSecret || appSecret.trim() === '') {
     return false;
   }
 

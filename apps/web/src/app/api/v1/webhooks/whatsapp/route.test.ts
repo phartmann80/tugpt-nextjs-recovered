@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createHmac } from 'node:crypto';
 
 // Mock feature flags
@@ -322,5 +322,222 @@ describe('whatsapp webhook route', () => {
     const { POST } = await import('./route');
     const response = await POST(request as unknown as Parameters<typeof POST>[0]);
     expect(response.status).toBe(413);
+  });
+});
+
+/**
+ * The 2026-08-31 guard: a missing secret must fail closed.
+ *
+ * Every test in this block was a PASS for the attacker before that change —
+ * that is, the endpoint answered 200 and did the work. The route read both
+ * secrets as `process.env.X || ''`, so an unconfigured server compared an
+ * anonymous caller's input against the empty string and agreed with it.
+ *
+ * None of this was reachable on 2026-08-31: `whatsapp_integration` is false and
+ * both handlers 404 first. The flag is a product switch, not a security
+ * control, and the whole point is that the day it is flipped must not also be
+ * the day anyone checks whether `/etc/tugpt/web.env` has these two lines in it.
+ *
+ * These tests can stub the environment per test only because the route now
+ * reads `process.env` per request. While the values were module-level
+ * constants, the whole file shared whatever was set before the first
+ * `await import('./route')`, and a later `vi.stubEnv` changed nothing —
+ * silently, which is the worst way for a security test to be wrong.
+ */
+describe('whatsapp webhook route: missing secrets fail closed', () => {
+  let consoleError: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.stubEnv('WHATSAPP_APP_SECRET', APP_SECRET);
+    vi.stubEnv('WHATSAPP_VERIFY_TOKEN', 'test-verify-token');
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'http://localhost:54321');
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'test-service-key');
+    vi.clearAllMocks();
+    mockIsEnabled.mockReturnValue(true);
+    mockRpc.mockResolvedValue({ data: { is_new: true, webhook_event_id: 'test-uuid' }, error: null });
+    consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  function getRequest(query: string): Request {
+    return new Request(`http://localhost/api/v1/webhooks/whatsapp?${query}`, { method: 'GET' });
+  }
+
+  describe('GET, with no verify token configured', () => {
+    it('refuses an empty hub.verify_token instead of handing over the challenge', async () => {
+      // THE ATTACK. `?hub.verify_token=` (empty) against `VERIFY_TOKEN = ''`
+      // matched, and this returned 200 with the challenge echoed back —
+      // completing Meta's webhook handshake for anyone who asked for it.
+      vi.stubEnv('WHATSAPP_VERIFY_TOKEN', undefined);
+      const { GET } = await import('./route');
+      const response = await GET(
+        getRequest('hub.mode=subscribe&hub.verify_token=&hub.challenge=abc123') as unknown as Parameters<typeof GET>[0]
+      );
+
+      expect(response.status).toBe(403);
+      expect(await response.text()).not.toContain('abc123');
+    });
+
+    it('refuses a whitespace-only token, matched by a whitespace-only guess', async () => {
+      vi.stubEnv('WHATSAPP_VERIFY_TOKEN', '   ');
+      const { GET } = await import('./route');
+      const response = await GET(
+        getRequest('hub.mode=subscribe&hub.verify_token=%20%20%20&hub.challenge=abc123') as unknown as Parameters<typeof GET>[0]
+      );
+      expect(response.status).toBe(403);
+    });
+
+    it('answers exactly as it does for a wrong token, telling a prober nothing', async () => {
+      // Same status, same empty body. Whether this server is configured is not
+      // something an anonymous caller gets to learn by asking.
+      vi.stubEnv('WHATSAPP_VERIFY_TOKEN', undefined);
+      const { GET } = await import('./route');
+      const unconfigured = await GET(
+        getRequest('hub.mode=subscribe&hub.verify_token=guess&hub.challenge=abc') as unknown as Parameters<typeof GET>[0]
+      );
+
+      vi.stubEnv('WHATSAPP_VERIFY_TOKEN', 'test-verify-token');
+      const wrongToken = await GET(
+        getRequest('hub.mode=subscribe&hub.verify_token=guess&hub.challenge=abc') as unknown as Parameters<typeof GET>[0]
+      );
+
+      expect(unconfigured.status).toBe(wrongToken.status);
+      expect(await unconfigured.text()).toBe(await wrongToken.text());
+    });
+
+    it('tells the operator, in the log, what the caller is not told', async () => {
+      vi.stubEnv('WHATSAPP_VERIFY_TOKEN', undefined);
+      const { GET } = await import('./route');
+      await GET(getRequest('hub.mode=subscribe&hub.verify_token=') as unknown as Parameters<typeof GET>[0]);
+
+      expect(consoleError).toHaveBeenCalled();
+      expect(String(consoleError.mock.calls[0][0])).toContain('WHATSAPP_VERIFY_TOKEN');
+    });
+
+    it('still verifies normally when the token is configured', async () => {
+      // The guard has to refuse blanks without refusing anything else.
+      const { GET } = await import('./route');
+      const response = await GET(
+        getRequest('hub.mode=subscribe&hub.verify_token=test-verify-token&hub.challenge=abc123') as unknown as Parameters<typeof GET>[0]
+      );
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('abc123');
+    });
+  });
+
+  describe('POST, with no app secret configured', () => {
+    it('refuses a payload signed with the empty secret, and ingests nothing', async () => {
+      // THE OTHER ATTACK, and the worse one. HMAC-SHA256 keyed on '' is a
+      // signature anyone can compute — Meta documents the algorithm — so every
+      // forged payload entered the pipeline as a genuine customer message.
+      vi.stubEnv('WHATSAPP_APP_SECRET', undefined);
+      const forged = createSignedRequest(
+        {
+          entry: [{
+            changes: [{
+              value: {
+                metadata: { phone_number_id: 'x' },
+                messages: [{ id: 'wamid.forged', from: '1', type: 'text', text: { body: 'hola' }, timestamp: '1' }],
+              },
+            }],
+          }],
+        },
+        '' // the key the server would have used
+      );
+
+      const { POST } = await import('./route');
+      const response = await POST(forged as unknown as Parameters<typeof POST>[0]);
+
+      expect(response.status).toBe(401);
+      expect(mockRpc).not.toHaveBeenCalled();
+    });
+
+    it('refuses a whitespace-only secret the same way', async () => {
+      vi.stubEnv('WHATSAPP_APP_SECRET', '   ');
+      const forged = createSignedRequest({ entry: [] }, '   ');
+      const { POST } = await import('./route');
+      const response = await POST(forged as unknown as Parameters<typeof POST>[0]);
+      expect(response.status).toBe(401);
+    });
+
+    it('answers exactly as it does for a forged signature', async () => {
+      vi.stubEnv('WHATSAPP_APP_SECRET', undefined);
+      const { POST } = await import('./route');
+      const unconfigured = await POST(
+        createSignedRequest({ entry: [] }, 'anything') as unknown as Parameters<typeof POST>[0]
+      );
+
+      vi.stubEnv('WHATSAPP_APP_SECRET', APP_SECRET);
+      const forged = await POST(
+        createSignedRequest({ entry: [] }, 'wrong-secret') as unknown as Parameters<typeof POST>[0]
+      );
+
+      expect(unconfigured.status).toBe(forged.status);
+      expect(await unconfigured.text()).toBe(await forged.text());
+    });
+
+    it('tells the operator which variable is missing', async () => {
+      vi.stubEnv('WHATSAPP_APP_SECRET', undefined);
+      const { POST } = await import('./route');
+      await POST(createSignedRequest({ entry: [] }, '') as unknown as Parameters<typeof POST>[0]);
+
+      expect(consoleError).toHaveBeenCalled();
+      expect(String(consoleError.mock.calls[0][0])).toContain('WHATSAPP_APP_SECRET');
+    });
+
+    it('never puts the secret itself in the log', async () => {
+      // The one rule a function whose job is to talk about a secret is most
+      // likely to break. docs/production_environment.md: no secrets in logs.
+      vi.stubEnv('WHATSAPP_APP_SECRET', '   ');
+      const { POST } = await import('./route');
+      await POST(createSignedRequest({ entry: [] }, '   ') as unknown as Parameters<typeof POST>[0]);
+
+      const logged = consoleError.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+      expect(logged).not.toContain('test-secret');
+    });
+
+    it('refuses before reading the body at all', async () => {
+      // A request that cannot be authenticated should not be parsed, sized or
+      // hashed. An unauthenticated caller must not be able to make this server
+      // do a megabyte of work by sending a megabyte.
+      vi.stubEnv('WHATSAPP_APP_SECRET', undefined);
+      const request = createSignedRequest({ entry: [] }, '');
+      const textSpy = vi.spyOn(request, 'text');
+
+      const { POST } = await import('./route');
+      const response = await POST(request as unknown as Parameters<typeof POST>[0]);
+
+      expect(response.status).toBe(401);
+      expect(textSpy).not.toHaveBeenCalled();
+    });
+
+    it('still accepts a correctly signed payload when the secret is configured', async () => {
+      const { POST } = await import('./route');
+      const response = await POST(
+        createSignedRequest({ entry: [] }) as unknown as Parameters<typeof POST>[0]
+      );
+      expect(response.status).toBe(200);
+    });
+  });
+
+  it('reads the environment per request, not once per process', async () => {
+    // The property the tests above depend on. If someone reinstates
+    // module-level `const APP_SECRET = process.env...`, the two calls below
+    // return the same status and this fails — which is the only warning the
+    // rest of this block would otherwise get, since it would keep passing on
+    // whichever value happened to be set first.
+    const { GET } = await import('./route');
+    const query = 'hub.mode=subscribe&hub.verify_token=second-token&hub.challenge=abc';
+
+    const before = await GET(getRequest(query) as unknown as Parameters<typeof GET>[0]);
+    expect(before.status).toBe(403);
+
+    vi.stubEnv('WHATSAPP_VERIFY_TOKEN', 'second-token');
+    const after = await GET(getRequest(query) as unknown as Parameters<typeof GET>[0]);
+    expect(after.status).toBe(200);
   });
 });

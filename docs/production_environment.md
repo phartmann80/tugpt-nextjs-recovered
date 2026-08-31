@@ -477,6 +477,21 @@ successful challenge to save a callback URL. Removing the subscription is
 therefore the action available today; re-pointing it belongs to the supervised
 flip, when the flag goes on and verification can actually complete.
 
+**Before that flip: `WHATSAPP_APP_SECRET` and `WHATSAPP_VERIFY_TOKEN` must both
+be non-empty in `/etc/tugpt/web.env`.** Since 2026-08-31 the route refuses every
+request while either is blank — 403 on GET, 401 on POST, the same answers a
+wrong token and a forged signature get, with a `[whatsapp-webhook]` line naming
+the missing variable on the server. Verification will simply fail, indefinitely
+and for a reason Meta's dashboard will not explain, so check the two lines
+before re-pointing the callback rather than after.
+
+That refusal replaced `process.env.X || ''`, which is worth stating plainly
+because it was the actual behaviour until then: an unset verify token became the
+empty string and matched `?hub.verify_token=` from any caller, and an unset app
+secret keyed the HMAC on the empty string, which anyone can compute. The feature
+flag was the only thing standing in front of both. A flag is a product switch,
+not a security control, and it was one flip away from being the entire defence.
+
 ### 5.5 Building and deploying a new release
 
 Two lines. `tugpt.service` carries `EnvironmentFile=/etc/tugpt/web.env`, so the

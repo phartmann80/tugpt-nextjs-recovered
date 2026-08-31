@@ -345,5 +345,11 @@ Two rules follow, and they are the point of this section:
 - Enabling outbound is a **two-key operation** — the code default *and* the database row — and both
   keys turn only with explicit owner approval, per the standing directive.
 
+A third thing must be true before either key turns, and it is not a key: both `WHATSAPP_APP_SECRET`
+and `WHATSAPP_VERIFY_TOKEN` must be non-empty in `/etc/tugpt/web.env`. The route refuses everything
+while either is blank (§5.4 of `docs/production_environment.md`), so a flip with a missing line
+produces an endpoint that rejects Meta silently rather than an open one — which is the correct
+failure, and still a failure worth not discovering during a supervised window.
+
 Until then, the end of the pipeline is a human clicking Approve in the dashboard. Nothing after
 that step exists yet, which is exactly the intended state.
