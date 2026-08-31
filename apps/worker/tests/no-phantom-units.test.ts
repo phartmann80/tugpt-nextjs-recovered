@@ -38,21 +38,11 @@
  * wrong thing to run — which `controlled-rollout.md` §5 now does. Shell scripts
  * are inspected in full.
  *
- * WHAT IS NOT GUARDED YET, AND WHY
- *
- * `apps/` and `packages/` are deliberately out of scope in this first cut, and
- * there is one known violation waiting in them: `apps/worker/src/e2e/
- * milestone1.ts` prints `systemctl status tugpt-draft-worker` from the two
- * timeout paths in `cmdWait`. That is the worst-placed instance of all of them —
- * it is printed at the exact moment an operator is trying to work out why the
- * harness produced no draft.
- *
- * It is not fixed here because it is not a runbook. It is 1177 lines of source
- * whose operator-facing messages want extracting rather than patching in place,
- * and folding that into a documentation correction makes a reviewable PR into
- * an unreviewable one. It has its own follow-up, which adds those two roots to
- * SEARCH_ROOTS in the same commit that fixes the strings — so the guard and the
- * fix land together and neither can be forgotten.
+ * Source files are inspected in full: a unit name inside a string literal is an
+ * instruction the moment it is printed to an operator, which is exactly how the
+ * milestone-1 harness's two timeout messages went stale. They pointed at
+ * `systemctl status tugpt-draft-worker` — printed at the precise moment someone
+ * is working out why the harness produced no draft.
  *
  * The set of real units is read from `deploy/systemd/` rather than hardcoded,
  * so adding a unit file is all it takes to make its name legal here.
@@ -111,10 +101,11 @@ const ALLOWED = new Map<string, string>([
   ],
 ]);
 
-/** See "WHAT IS NOT GUARDED YET" in the header before adding or removing a root. */
 const SEARCH_ROOTS = [
   { dir: 'docs', exts: ['.md'], fencedOnly: true },
   { dir: 'deploy', exts: ['.sh'], fencedOnly: false },
+  { dir: 'apps', exts: ['.ts', '.tsx'], fencedOnly: false },
+  { dir: 'packages', exts: ['.ts', '.tsx'], fencedOnly: false },
 ];
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.next', '.turbo', '.git', 'coverage']);
@@ -238,23 +229,6 @@ describe('no runbook drives a unit this host does not have', () => {
     const fenced = instructionLines(doc, true).map((l) => l.text);
     expect(fenced).toEqual(['systemctl is-active tugpt-draft-worker']);
     expect(instructionLines(doc, false).length).toBe(7);
-  });
-
-  it('knows the one violation it is not covering yet', () => {
-    // A scoped guard that does not say what it is leaving out is a guard that
-    // reads as broader than it is. This pins the known gap so the follow-up
-    // cannot quietly not happen: when milestone1.ts is fixed, this test fails
-    // and is deleted in the same commit that widens SEARCH_ROOTS.
-    const harness = readFileSync(
-      path.join(REPO_ROOT, 'apps', 'worker', 'src', 'e2e', 'milestone1.ts'),
-      'utf8'
-    );
-    const pending = harness.split('\n').flatMap(unitsOnLine);
-    expect(
-      pending.length,
-      'apps/worker/src/e2e/milestone1.ts no longer names a phantom unit — delete this test ' +
-        'and add apps/ and packages/ to SEARCH_ROOTS.'
-    ).toBeGreaterThan(0);
   });
 
   it('no operational instruction names a unit that does not exist', () => {

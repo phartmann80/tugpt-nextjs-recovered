@@ -721,13 +721,15 @@ async function cmdWait(ctx: Ctx, providerMessageId: string, timeoutMs: number): 
   if (!messageId) {
     fail(
       `Timed out: the whatsapp worker never turned the queued event into a message row. ` +
-        `Check that tugpt-whatsapp-worker is running: systemctl status tugpt-whatsapp-worker`
+        `Check the whatsapp-worker container is running: ` +
+        `cd /opt/tugpt && docker compose -p tugpt ps whatsapp-worker`
     );
   }
   fail(
     `Timed out waiting for the draft. The message was processed but no draft completed. ` +
-      `Check that tugpt-draft-worker is running and has LANGDOCK_API_CODE: ` +
-      `systemctl status tugpt-draft-worker && journalctl -u tugpt-draft-worker -n 100`
+      `Check the draft-worker container is running and has LANGDOCK_API_CODE: ` +
+      `cd /opt/tugpt && docker compose -p tugpt ps draft-worker ` +
+      `&& docker compose -p tugpt logs --tail=100 draft-worker`
   );
 }
 
