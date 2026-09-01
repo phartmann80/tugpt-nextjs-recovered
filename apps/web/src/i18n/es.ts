@@ -90,6 +90,19 @@ export const es = {
   'drafts.detail.received': 'Recibido: {at}',
   'drafts.detail.from': 'De: {contact}',
   'drafts.detail.conversationHeading': 'Conversación',
+  'drafts.thread.heading': 'Conversación con el cliente',
+  'drafts.thread.loading': 'Cargando la conversación…',
+  'drafts.thread.loadFailed': 'No se pudo cargar la conversación',
+  'drafts.thread.empty': 'Todavía no hay mensajes en esta conversación.',
+  'drafts.thread.olderHidden':
+    'Se muestran los {count} mensajes más recientes. Hay mensajes anteriores.',
+  'drafts.thread.sourceOutOfWindow':
+    'El mensaje que responde este borrador es anterior a los mensajes que se ven aquí. Está arriba, en «Mensaje del cliente».',
+  'drafts.thread.sourceLabel': 'Este borrador responde a este mensaje',
+  'drafts.thread.fromCustomer': 'Cliente',
+  'drafts.thread.fromBusiness': 'Negocio',
+  'drafts.thread.noBody': 'Mensaje sin texto',
+  'drafts.thread.retry': 'Reintentar',
   'drafts.detail.conversationStatus': 'Estado: {status}',
   'drafts.detail.featureUnavailable':
     'La generación de borradores con IA no está disponible para su organización.',

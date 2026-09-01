@@ -15,6 +15,7 @@ import { useT } from '@/i18n/provider';
 import { DraftActions } from './DraftActions';
 import { DraftRevisionHistory } from './DraftRevisionHistory';
 import { DraftEventHistory } from './DraftEventHistory';
+import { ConversationThread } from './ConversationThread';
 
 export function DraftDetail({ draftId }: { draftId: string }) {
   const t = useT();
@@ -227,21 +228,18 @@ export function DraftDetail({ draftId }: { draftId: string }) {
         </div>
       )}
 
-      {/* Conversation context */}
-      {draft.conversation && (
-        <div className="mb-6">
-          <h2 className="mb-2 text-lg font-semibold text-zinc-800">
-            {t('drafts.detail.conversationHeading')}
-          </h2>
-          <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-600">
-            <span>
-              {t('drafts.detail.conversationStatus', {
-                status: t(`drafts.conversation.${draft.conversation.status}`),
-              })}
-            </span>
-          </div>
-        </div>
-      )}
+      {/*
+        The conversation, as a thread rather than a status line.
+
+        This block used to render one field — the conversation's status — under
+        a heading called "Conversation". A reviewer approving a reply on behalf
+        of a business had the AI's guess and the single message it answered, and
+        nothing to judge either against: not whether the customer had asked the
+        same thing twice, not whether the shop had already replied an hour ago.
+        The thread is the Sep 18 milestone and it carries the status in its own
+        header, so nothing is lost by replacing this.
+      */}
+      {draft.conversation && <ConversationThread draftId={draft.id} />}
 
       {/* Action buttons — only for draft status, not terminal */}
       {draft.status === 'draft' && (
