@@ -24,8 +24,52 @@ export interface DraftSourceMessage {
 
 export interface DraftConversationContext {
   id: string;
-  contact_phone: string;
+  /**
+   * Masked, never the raw number — see `contact-display.ts`.
+   *
+   * This was `contact_phone: string`, the full number, sent to the browser on
+   * every draft-detail request and rendered nowhere. Renaming rather than
+   * masking in place is deliberate: a field called `contact_phone` invites the
+   * next caller to treat it as one.
+   */
+  contact_display: string | null;
   status: 'open' | 'needs_human' | 'closed';
+}
+
+/** One message in a conversation, as a reviewer sees it. */
+export interface ThreadMessage {
+  id: string;
+  body: string | null;
+  direction: 'inbound' | 'outbound';
+  created_at: string;
+  /**
+   * True for the message this draft is answering.
+   *
+   * The point of the thread view is reading the history *around* that message;
+   * a thread that does not say which one it is has lost the thing it is for.
+   */
+  is_source: boolean;
+}
+
+/** A bounded window onto a conversation, anchored by the draft being reviewed. */
+export interface ConversationThread {
+  conversation_id: string;
+  contact_display: string | null;
+  status: 'open' | 'needs_human' | 'closed';
+  /** Oldest first — reading order, not query order. */
+  messages: ThreadMessage[];
+  /** True when the conversation has messages older than the window. */
+  has_more: boolean;
+  /**
+   * False when the message this draft answers is older than the window.
+   *
+   * Rare — a draft is generated from a recent message — but silent if it were
+   * not reported: the reviewer would read a history that does not contain the
+   * message being answered and have no way to tell. The draft's own source
+   * message is rendered separately above the thread, so nothing is hidden; the
+   * UI just has to say that the two are not contiguous.
+   */
+  source_in_window: boolean;
 }
 
 export interface DraftDetail {

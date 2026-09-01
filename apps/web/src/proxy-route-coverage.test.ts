@@ -154,6 +154,16 @@ const ROUTES: RouteExpectation[] = [
     why: 'Handler authenticates; RLS scopes review events to the draft owner org.',
   },
   {
+    path: '/api/v1/drafts/[draftId]/thread',
+    kind: 'api',
+    type: 'public',
+    why:
+      'Handler authenticates, resolves tenant, and passes the feature gate before ' +
+      'reading; RLS scopes messages to the org and the query scopes them to the ' +
+      'conversation. Returns more customer text than any other route, so its ' +
+      'serialised response shape is asserted field-by-field in thread-route.test.ts.',
+  },
+  {
     path: '/api/v1/drafts/[draftId]/revisions',
     kind: 'api',
     type: 'public',

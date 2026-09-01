@@ -78,6 +78,19 @@ export const en: Dictionary = {
   'drafts.detail.received': 'Received: {at}',
   'drafts.detail.from': 'From: {contact}',
   'drafts.detail.conversationHeading': 'Conversation',
+  'drafts.thread.heading': 'Conversation with the customer',
+  'drafts.thread.loading': 'Loading the conversation…',
+  'drafts.thread.loadFailed': 'Could not load the conversation',
+  'drafts.thread.empty': 'No messages in this conversation yet.',
+  'drafts.thread.olderHidden':
+    'Showing the {count} most recent messages. There are older ones.',
+  'drafts.thread.sourceOutOfWindow':
+    'The message this draft answers is older than the messages shown here. It is above, under "Customer message".',
+  'drafts.thread.sourceLabel': 'This draft answers this message',
+  'drafts.thread.fromCustomer': 'Customer',
+  'drafts.thread.fromBusiness': 'Business',
+  'drafts.thread.noBody': 'Message has no text',
+  'drafts.thread.retry': 'Retry',
   'drafts.detail.conversationStatus': 'Status: {status}',
   'drafts.detail.featureUnavailable':
     'AI draft generation is not available for your organization.',
