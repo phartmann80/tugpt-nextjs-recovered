@@ -11,8 +11,13 @@
  * There is no landing page to show yet and inventing one here would be scope,
  * so `/` sends people where they were going anyway: the reviewer inbox. The
  * proxy takes it from there — /dashboard is a protected route, so a signed-out
- * visitor is bounced to /auth/login?redirect=/dashboard/drafts and lands back
+ * visitor is bounced to /auth/login?redirect=/dashboard/inbox and lands back
  * on the inbox once they authenticate.
+ *
+ * Until 2026-09-01 this pointed at /dashboard/drafts, which the comment above
+ * has always called "the inbox" for want of anything better. There is now an
+ * actual inbox — a list of conversations, which is what a reviewer arrives
+ * wanting — so the word means one thing again and `/` points at it.
  *
  * Redirecting to the inbox rather than straight to /auth/login is deliberate:
  * an already-signed-in reviewer goes directly to work instead of touching a
@@ -26,5 +31,5 @@
 import { redirect } from 'next/navigation';
 
 export default function RootPage(): never {
-  redirect('/dashboard/drafts');
+  redirect('/dashboard/inbox');
 }

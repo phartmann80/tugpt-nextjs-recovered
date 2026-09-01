@@ -39,7 +39,7 @@ import { NAV_ITEMS, isActive } from '../src/components/shell/nav-items';
 const REACHED_BY: ReadonlyArray<{ path: string; by: string }> = [
   {
     path: '/',
-    by: 'Whatever a person types or bookmarks for the bare domain. It redirects to /dashboard/drafts and renders nothing.',
+    by: 'Whatever a person types or bookmarks for the bare domain. It redirects to /dashboard/inbox and renders nothing.',
   },
   {
     path: '/auth/login',
@@ -55,7 +55,7 @@ const REACHED_BY: ReadonlyArray<{ path: string; by: string }> = [
   },
   {
     path: '/dashboard/drafts/[draftId]',
-    by: 'Every row of the inbox list links to one, asserted in DraftInbox.test.tsx. A dynamic route has no single URL to navigate to.',
+    by: 'Every row of the draft list links to one (DraftInbox.test.tsx), as does every conversation with a draft waiting (ConversationInbox.test.tsx). A dynamic route has no single URL to navigate to.',
   },
 ];
 
