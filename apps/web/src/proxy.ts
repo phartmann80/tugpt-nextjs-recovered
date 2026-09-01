@@ -48,6 +48,7 @@ const PUBLIC_PREFIXES: readonly string[] = [
   // Handlers authenticate and resolve tenant context; RLS scopes the rows.
   '/api/v1/drafts',
   '/api/v1/organizations',
+  '/api/v1/conversations',
 ];
 
 /**

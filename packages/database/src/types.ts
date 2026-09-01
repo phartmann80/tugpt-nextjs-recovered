@@ -237,6 +237,16 @@ export interface Conversation {
   last_message_at: string | null;
   created_at: string;
   updated_at: string;
+  /**
+   * `COALESCE(last_message_at, created_at)`, generated and STORED. Read-only —
+   * the database rejects any attempt to write it (migration 20260901000001).
+   *
+   * Order inbox-style lists on this, never on `last_message_at`: that column is
+   * nullable, DESC implies NULLS FIRST, and its only producer copies a nullable
+   * unvalidated `provider_timestamp` into it — so a conversation whose webhook
+   * carried no readable timestamp sorts above every recent one.
+   */
+  activity_at: string;
 }
 
 export interface Message {

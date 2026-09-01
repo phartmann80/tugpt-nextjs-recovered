@@ -16,10 +16,13 @@ export interface NavItem {
  * page added without a way to get to it should fail a test rather than wait
  * for somebody to notice they cannot find it.
  *
- * One entry today. The thread view (Sep 18) and the unified inbox (Sep 25) add
- * theirs here, and the guard is what makes forgetting to impossible.
+ * The thread view (Sep 18) added no entry — it lives inside a draft. The
+ * unified inbox (Sep 25) is here, and first: it answers "who is waiting",
+ * which is the question a reviewer arrives with, while the draft list answers
+ * "what did the AI write" about the subset that already has a draft.
  */
 export const NAV_ITEMS: readonly NavItem[] = [
+  { href: '/dashboard/inbox', labelKey: 'nav.inbox' },
   { href: '/dashboard/drafts', labelKey: 'nav.drafts' },
 ];
 

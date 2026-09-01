@@ -51,8 +51,8 @@ const ROUTES: RouteExpectation[] = [
     // This reason used to read "Landing page. Renders no tenant data." True,
     // and useless: `/` was create-next-app boilerplate the entire time, and a
     // reason written about tenant data could never catch that. It now
-    // redirects to the inbox and renders nothing at all.
-    why: 'Redirects to /dashboard/drafts. Renders nothing and reads nothing; the proxy gates the destination.',
+    // redirects to the conversation inbox and renders nothing at all.
+    why: 'Redirects to /dashboard/inbox. Renders nothing and reads nothing; the proxy gates the destination.',
   },
   {
     path: '/auth/login',
@@ -73,10 +73,16 @@ const ROUTES: RouteExpectation[] = [
     why: 'Clears the session; must not redirect to login on the way out.',
   },
   {
+    path: '/dashboard/inbox',
+    kind: 'page',
+    type: 'protected',
+    why: 'Unified conversation inbox. The proxy is the only gate on the page shell.',
+  },
+  {
     path: '/dashboard/drafts',
     kind: 'page',
     type: 'protected',
-    why: 'Reviewer inbox. The proxy is the only gate on the page shell.',
+    why: 'Draft list. The proxy is the only gate on the page shell.',
   },
   // No entry for /dashboard itself: `dashboard/layout.tsx` wraps the pages
   // below it and has no URL of its own. If a `dashboard/page.tsx` is ever
@@ -162,6 +168,16 @@ const ROUTES: RouteExpectation[] = [
       'reading; RLS scopes messages to the org and the query scopes them to the ' +
       'conversation. Returns more customer text than any other route, so its ' +
       'serialised response shape is asserted field-by-field in thread-route.test.ts.',
+  },
+  {
+    path: '/api/v1/conversations',
+    kind: 'api',
+    type: 'public',
+    why:
+      'Handler authenticates, resolves tenant, and passes the same feature gate as the ' +
+      'draft routes before reading; every query is scoped by organization_id and RLS ' +
+      'scopes conversations to org members. Returns masked contacts and no message text ' +
+      'at all, asserted in conversations-route.test.ts.',
   },
   {
     path: '/api/v1/drafts/[draftId]/revisions',
