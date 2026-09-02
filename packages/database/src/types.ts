@@ -262,6 +262,109 @@ export interface Conversation {
 }
 
 /**
+ * A thing the platform can meter.
+ *
+ * `kind` matters: a `limit` is about what exists right now and can go down when
+ * something is deleted; a `meter` is consumption within a subscription period
+ * and does not go down until the period rolls. Treating them alike produces
+ * "you used 3 seats this month", which is not a sentence about anything.
+ */
+export interface EntitlementMetric {
+  key: string;
+  kind: 'limit' | 'meter';
+  /** A display label — 'seat', 'number', 'draft'. */
+  unit: string;
+  description: string;
+  created_at: string;
+}
+
+/**
+ * A sellable plan.
+ *
+ * Carries no price: a price is a currency, a tax treatment and a billing cycle,
+ * and the payment provider is still an open decision. The catalogue also ships
+ * empty — allowances are a product decision, and entitlement resolution fails
+ * closed until rows exist (migration 20260903000001).
+ */
+export interface Plan {
+  id: string;
+  /** Stable identifier code refers to; renaming `name` must not change meaning. */
+  key: string;
+  name: string;
+  /** Whether signup may offer it. A retired plan stays, because orgs are on it. */
+  is_available: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** What one plan grants for one metric. */
+export interface PlanEntitlement {
+  plan_id: string;
+  metric: string;
+  /**
+   * `null` means unlimited — not `-1`, not `MAX_SAFE_INTEGER`. A sentinel
+   * participates in arithmetic and produces plausible nonsense; `null` forces
+   * every reader to handle the case.
+   */
+  allowance: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Which plan an organization is on.
+ *
+ * `past_due` still resolves entitlements. Cutting a customer off the hour an
+ * invoice fails is a dunning policy, not a side effect of a status enum.
+ */
+export interface OrganizationSubscription {
+  id: string;
+  organization_id: string;
+  plan_id: string;
+  status: 'active' | 'past_due' | 'canceled';
+  /** The metering window for `meter` metrics. Both null or both set. */
+  current_period_start: string | null;
+  current_period_end: string | null;
+  canceled_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * A per-organization exception to its plan's allowance.
+ *
+ * This exists so the alternative does not happen: without it, granting one
+ * customer one extra number is an edit to the plan row, which changes every
+ * organization on that plan and looks afterwards like it was always that way.
+ */
+export interface OrganizationEntitlementOverride {
+  organization_id: string;
+  metric: string;
+  /** `null` means unlimited, as on {@link PlanEntitlement}. */
+  allowance: number | null;
+  /** Required, minimum 8 characters — an unexplained override is a mistake. */
+  reason: string;
+  /** `null` is permanent. An expiry is what separates a trial from a price. */
+  expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One row of `public.organization_entitlements(organization_id)`. */
+export interface ResolvedEntitlement {
+  metric: string;
+  kind: 'limit' | 'meter';
+  unit: string;
+  /** `false` means no entitlement at all. Distinct from an allowance of 0. */
+  granted: boolean;
+  /** `null` with `granted: true` means unlimited. */
+  allowance: number | null;
+  used: number;
+  source: 'override' | 'plan' | 'none';
+}
+
+/**
  * A person an organization talks to.
  *
  * Identity is `(organization_id, phone)` and deliberately NOT scoped to a
@@ -388,6 +491,35 @@ export interface Database {
           & { id?: string; created_at?: string; updated_at?: string; activity_at?: never; contact_id?: string };
         Update: Partial<Conversation>;
       };
+      entitlement_metrics: {
+        Row: EntitlementMetric;
+        Insert: Omit<EntitlementMetric, 'created_at'> & { created_at?: string };
+        Update: Partial<EntitlementMetric>;
+      };
+      plans: {
+        Row: Plan;
+        Insert: Omit<Plan, 'id' | 'created_at' | 'updated_at'>
+          & { id?: string; is_available?: boolean; sort_order?: number; created_at?: string; updated_at?: string };
+        Update: Partial<Plan>;
+      };
+      plan_entitlements: {
+        Row: PlanEntitlement;
+        Insert: Omit<PlanEntitlement, 'created_at' | 'updated_at'>
+          & { created_at?: string; updated_at?: string };
+        Update: Partial<PlanEntitlement>;
+      };
+      organization_subscriptions: {
+        Row: OrganizationSubscription;
+        Insert: Omit<OrganizationSubscription, 'id' | 'created_at' | 'updated_at'>
+          & { id?: string; status?: OrganizationSubscription['status']; created_at?: string; updated_at?: string };
+        Update: Partial<OrganizationSubscription>;
+      };
+      organization_entitlement_overrides: {
+        Row: OrganizationEntitlementOverride;
+        Insert: Omit<OrganizationEntitlementOverride, 'created_at' | 'updated_at'>
+          & { created_at?: string; updated_at?: string };
+        Update: Partial<OrganizationEntitlementOverride>;
+      };
       contacts: {
         Row: Contact;
         // No Insert/Update surface that differs from the row: the application
@@ -452,6 +584,12 @@ export interface Database {
       [_ in never]: never;
     };
     Functions: {
+      organization_entitlements: {
+        Args: {
+          p_organization_id: string;
+        };
+        Returns: ResolvedEntitlement[];
+      };
       create_organization_with_owner: {
         Args: {
           p_name: string;
