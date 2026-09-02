@@ -52,11 +52,31 @@ export interface InboxConversation {
    * than by whatever order the rows arrive in.
    */
   awaiting_draft_id: string | null;
+  /**
+   * The reviewer who has claimed this conversation, or null if nobody has.
+   *
+   * A team member, not a customer — so unlike `contact_display` this carries a
+   * name. Members can already see each other through `organization_members`;
+   * showing a colleague's name to a colleague reveals nothing new, and an
+   * inbox that showed a UUID here would be useless for the one thing it is
+   * for, which is knowing whether somebody already has this.
+   */
+  assigned_to: { id: string; display: string } | null;
 }
 
 /** The statuses a reviewer can filter to, plus "all". */
 export const INBOX_FILTERS = ['all', 'open', 'needs_human', 'closed'] as const;
 export type InboxFilter = (typeof INBOX_FILTERS)[number];
+
+/**
+ * Who the conversation belongs to, as a filter.
+ *
+ * Separate from the status filter rather than folded into one list, because
+ * they are independent questions — "what state is this in" and "is it mine" —
+ * and a single list would need an entry per combination.
+ */
+export const INBOX_ASSIGNMENTS = ['all', 'mine', 'unassigned'] as const;
+export type InboxAssignment = (typeof INBOX_ASSIGNMENTS)[number];
 
 export interface InboxPage {
   conversations: InboxConversation[];

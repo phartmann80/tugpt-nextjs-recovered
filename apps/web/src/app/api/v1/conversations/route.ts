@@ -32,7 +32,12 @@ import {
   DEFAULT_INBOX_LIMIT,
   decodeCursor,
 } from '@/lib/conversations/service';
-import { INBOX_FILTERS, type InboxFilter } from '@/lib/conversations/types';
+import {
+  INBOX_ASSIGNMENTS,
+  INBOX_FILTERS,
+  type InboxAssignment,
+  type InboxFilter,
+} from '@/lib/conversations/types';
 import type { ApiError } from '@/lib/draft-api/types';
 
 function errorResponse(status: number, code: string, message: string) {
@@ -96,6 +101,11 @@ export async function GET(request: Request) {
     // conversations are being asked for. Silently ignoring it would answer a
     // different question than the one asked and return page one, which a Next
     // button turns into an infinite loop through the same rows.
+    const assignmentParam = params.get('assignment') ?? 'all';
+    if (!INBOX_ASSIGNMENTS.includes(assignmentParam as InboxAssignment)) {
+      return errorResponse(400, 'INVALID_QUERY', 'Invalid assignment filter');
+    }
+
     const rawCursor = params.get('cursor');
     const cursor = decodeCursor(rawCursor);
     if (rawCursor !== null && cursor === null) {
@@ -105,6 +115,10 @@ export async function GET(request: Request) {
     const inbox = new ConversationInboxService(supabase);
     const page = await inbox.listConversations(activeTenant.organizationId, {
       status: statusParam as InboxFilter,
+      assignment: assignmentParam as InboxAssignment,
+      // From the session, never from the query string. A caller that could name
+      // the reviewer could read a colleague's queue by asking for it.
+      viewerId: user.id,
       limit: parseLimit(params.get('limit')),
       cursor,
     });
@@ -115,6 +129,7 @@ export async function GET(request: Request) {
       requestId,
       organizationId: activeTenant.organizationId,
       statusFilter: statusParam,
+      assignmentFilter: assignmentParam,
       count: page.conversations.length,
       hasMore: page.next_cursor !== null,
       paged: cursor !== null,

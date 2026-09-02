@@ -247,6 +247,46 @@ export interface Conversation {
    * carried no readable timestamp sorts above every recent one.
    */
   activity_at: string;
+  /**
+   * The reviewer who has claimed this conversation, or `null` for unclaimed.
+   *
+   * Writable only through `assign_conversation` (migration 20260901000002),
+   * which locks the row and compare-and-sets against the assignee the caller
+   * says they saw. Do not update it directly: a plain UPDATE cannot tell a
+   * deliberate handover from two reviewers racing on the same stale screen.
+   *
+   * `ON DELETE SET NULL` — an erased reviewer releases their conversations
+   * rather than blocking their own erasure. The record of who held it and when
+   * survives in `conversation_events`.
+   */
+  assigned_to: string | null;
+}
+
+/**
+ * One change to who is handling a conversation, or to whether the AI is
+ * drafting for it.
+ *
+ * A separate table rather than a row in `audit_logs`: ADR-009 fixes that table
+ * at exactly two writers, and the evidence pack reads it expecting only those.
+ * The status column answers "what is it now"; this answers "who turned the AI
+ * off for this customer, and when" — which a column can never answer, because
+ * the previous value is gone the moment it is overwritten.
+ *
+ * Append-only in practice: `service_role` holds SELECT and INSERT, nothing
+ * holds UPDATE or DELETE.
+ */
+export interface ConversationEvent {
+  id: string;
+  organization_id: string;
+  conversation_id: string;
+  action: 'assign' | 'unassign' | 'handoff' | 'return_to_ai';
+  /** The reviewer who acted. NULL once that profile is erased. */
+  actor_id: string | null;
+  /** Who the conversation was assigned to, for `assign`. NULL otherwise. */
+  subject_id: string | null;
+  previous_status: string;
+  new_status: string;
+  created_at: string;
 }
 
 export interface Message {
@@ -332,8 +372,24 @@ export interface Database {
       };
       conversations: {
         Row: Conversation;
-        Insert: Omit<Conversation, 'id' | 'created_at' | 'updated_at'> & { id?: string; created_at?: string; updated_at?: string };
-        Update: Partial<Conversation>;
+        // `activity_at` is generated and `assigned_to` defaults to NULL, so
+        // neither is required on insert — and `activity_at` in particular
+        // *cannot* be supplied: the database rejects a write to a generated
+        // column, so a type that demanded one would only ever be satisfied by
+        // an insert that fails.
+        Insert: Omit<Conversation, 'id' | 'created_at' | 'updated_at' | 'activity_at' | 'assigned_to'> & { id?: string; created_at?: string; updated_at?: string; assigned_to?: string | null };
+        // `assigned_to` is deliberately writable here only because `Partial`
+        // cannot express "through the RPC only". Use `assign_conversation`: a
+        // plain UPDATE cannot tell a handover from two reviewers racing.
+        Update: Partial<Omit<Conversation, 'activity_at'>>;
+      };
+      conversation_events: {
+        Row: ConversationEvent;
+        // Read-only from the application. The RPCs insert; nothing else may
+        // (migration 20260901000002 grants INSERT to service_role alone), for
+        // the same reason `audit_logs` has exactly two writers — ADR-009.
+        Insert: never;
+        Update: never;
       };
       messages: {
         Row: Message;
@@ -514,6 +570,42 @@ export interface Database {
           p_flag_key: string;
         };
         Returns: boolean;
+      };
+      /**
+       * `p_expected_assignee` is a compare-and-set, not a hint: the RPC raises
+       * P3C04 if the row says something else. It is required rather than
+       * optional so that "I saw it unassigned" cannot be the accidental
+       * default — that is the value most likely to be wrong and the one that
+       * silently wins a race between two reviewers.
+       */
+      assign_conversation: {
+        Args: {
+          p_conversation_id: string;
+          p_assignee: string | null;
+          p_expected_assignee: string | null;
+        };
+        Returns: {
+          conversation_id: string;
+          status: string;
+          assigned_to: string | null;
+        };
+      };
+      /**
+       * Stops AI drafting for one conversation, or restarts it.
+       * `process_inbound_message` enqueues a draft job only for `open`, so this
+       * is a kill switch and not a label.
+       */
+      set_conversation_handoff: {
+        Args: {
+          p_conversation_id: string;
+          p_needs_human: boolean;
+          p_expected_status: string;
+        };
+        Returns: {
+          conversation_id: string;
+          status: string;
+          assigned_to: string | null;
+        };
       };
     };
     Enums: {

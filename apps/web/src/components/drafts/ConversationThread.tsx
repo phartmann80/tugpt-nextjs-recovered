@@ -22,6 +22,14 @@
  *     unless stated — the reviewer would read a history that does not contain
  *     the message the draft is replying to.
  *
+ * THE HANDOFF CONTROL LIVES HERE, NOT ON THE INBOX
+ *
+ * Deciding that a conversation needs a person is a decision made while reading
+ * it, not while scanning a list. And it is not a label: `process_inbound_message`
+ * enqueues a draft only for conversations whose status is `open`, so handing
+ * off **stops the AI drafting replies to this customer** until someone returns
+ * it. The button says so, and the screen says so while it is off.
+ *
  * NO SEND CONTROL, HERE LEAST OF ALL. This is the screen that most looks like a
  * chat, which is exactly why Amendment 7 is asserted against it by name in
  * `ConversationThread.test.tsx`. Nothing in TuGPT sends.
@@ -42,6 +50,18 @@ export function ConversationThread({ draftId }: { draftId: string }) {
   // time the button is pressed, and setting a value to itself is a no-op React
   // optimises away — the exact bug the draft inbox shipped with for months.
   const [attempt, setAttempt] = useState(0);
+  const [handoffPending, setHandoffPending] = useState(false);
+  /**
+   * Kept apart from `error` on purpose.
+   *
+   * A handoff attempt always reloads the thread afterwards, and a successful
+   * reload sets `error` back to null. Writing a refusal into `error` therefore
+   * put the message on screen and wiped it a few milliseconds later: the
+   * reviewer clicked "hand off", it was refused, and the screen went back to
+   * looking normal. They would have walked away believing the AI had been
+   * stopped for that customer while it had not. Caught by T20.
+   */
+  const [handoffError, setHandoffError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -75,9 +95,45 @@ export function ConversationThread({ draftId }: { draftId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftId, attempt]);
 
+  /**
+   * Turn AI drafting off for this conversation, or back on.
+   *
+   * `expectedStatus` is what this screen is showing. If somebody else changed
+   * it since the page loaded the server refuses, and the reviewer is told
+   * rather than silently overriding a colleague's decision — which, in this
+   * direction, means silently turning the AI back on for a customer somebody
+   * deliberately took it off.
+   */
+  const setHandoff = useCallback(
+    async (needsHuman: boolean, expectedStatus: string, conversationId: string) => {
+      setHandoffPending(true);
+      setHandoffError(null);
+      try {
+        const res = await fetch(`/api/v1/conversations/${conversationId}/handoff`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ needsHuman, expectedStatus }),
+        });
+        if (!res.ok) {
+          setHandoffError(apiErrorText(t, await res.json()));
+        }
+      } catch {
+        setHandoffError(t('thread.handoffFailed'));
+      } finally {
+        setHandoffPending(false);
+        // Reload either way. On a conflict the screen was stale — which is the
+        // reason the request was refused — so leaving it stale would send the
+        // same wrong `expectedStatus` on the next click.
+        setAttempt((n) => n + 1);
+      }
+    },
+    [t]
+  );
+
   const retry = useCallback(() => {
     setLoading(true);
     setError(null);
+    setHandoffError(null);
     setAttempt((n) => n + 1);
   }, []);
 
@@ -110,6 +166,60 @@ export function ConversationThread({ draftId }: { draftId: string }) {
               })}
             </span>
           </div>
+
+          {/*
+            Stated in words, not implied by a status chip. "needs_human" is a
+            vocabulary word; "the AI is not drafting replies for this
+            conversation" is what actually happened.
+          */}
+          {thread.status === 'needs_human' && (
+            <p className="border-b border-sky-200 bg-sky-50 px-4 py-2 text-xs text-sky-900">
+              {t('thread.handedOff')}
+            </p>
+          )}
+
+          {/*
+            No control on a closed conversation: the RPC refuses that
+            transition (P3C05), and a button whose only outcome is an error
+            teaches a reviewer to stop reading error messages.
+          */}
+          {thread.status !== 'closed' && (
+            <div className="border-b border-zinc-200 px-4 py-2">
+              <button
+                type="button"
+                disabled={handoffPending}
+                onClick={() =>
+                  setHandoff(
+                    thread.status !== 'needs_human',
+                    thread.status,
+                    thread.conversation_id
+                  )
+                }
+                className="rounded border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:opacity-50"
+              >
+                {thread.status === 'needs_human'
+                  ? t('thread.returnToAi')
+                  : t('thread.handoff')}
+              </button>
+            </div>
+          )}
+
+          {/*
+            Outside the block above, not inside it. If the conversation was
+            closed by someone else between the click and the reload, the button
+            disappears — and an error rendered beside it would disappear with
+            it, which is the same silent failure T20 exists to prevent, just
+            one step further along.
+
+            role="alert" because this appears in response to a click the
+            reviewer has already looked away from, and what it says is "the
+            thing you just did did not happen".
+          */}
+          {handoffError && (
+            <p role="alert" className="border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700">
+              {handoffError}
+            </p>
+          )}
 
           {thread.has_more && (
             <p className="border-b border-zinc-200 bg-zinc-50 px-4 py-2 text-xs text-zinc-500">

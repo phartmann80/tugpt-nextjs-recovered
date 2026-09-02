@@ -180,6 +180,27 @@ const ROUTES: RouteExpectation[] = [
       'at all, asserted in conversations-route.test.ts.',
   },
   {
+    path: '/api/v1/conversations/[conversationId]/assign',
+    kind: 'api',
+    type: 'public',
+    why:
+      'Handler authenticates, resolves tenant, and passes the feature gate; it then ' +
+      'delegates every authorization decision to assign_conversation, which derives the ' +
+      'organization from the locked row and raises P3C01/P3C02/P3C03 rather than trusting ' +
+      'anything the caller sent. Asserted in assignment-routes.test.ts.',
+  },
+  {
+    path: '/api/v1/conversations/[conversationId]/handoff',
+    kind: 'api',
+    type: 'public',
+    why:
+      'Handler authenticates, resolves tenant, and passes the feature gate; the RPC owns ' +
+      'membership, role, and the legal transitions. This is the switch that stops AI ' +
+      'drafting for one customer, so the proxy classification being deliberate matters ' +
+      'more here than anywhere else: it is public to the proxy and authenticated twice ' +
+      'behind it. Asserted in assignment-routes.test.ts.',
+  },
+  {
     path: '/api/v1/drafts/[draftId]/revisions',
     kind: 'api',
     type: 'public',

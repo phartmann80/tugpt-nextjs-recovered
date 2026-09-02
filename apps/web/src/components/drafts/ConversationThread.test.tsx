@@ -188,6 +188,159 @@ describe('when it cannot load', () => {
   });
 });
 
+describe('the handoff control', () => {
+  /** The thread reload that follows every handoff attempt. */
+  const andReload = (status = 'open') => mockFetch.mockResolvedValueOnce(ok(thread({ status })));
+
+  async function clickHandoff(name: string) {
+    const user = userEvent.setup();
+    const button = await screen.findByRole('button', { name });
+    await user.click(button);
+    return button;
+  }
+
+  it('T15: offers to hand off an open conversation, and says what that does', async () => {
+    mockFetch.mockResolvedValueOnce(ok(thread({ status: 'open' })));
+    render(<ConversationThread draftId="d1" />);
+
+    expect(await screen.findByRole('button', { name: t('thread.handoff') })).toBeTruthy();
+    // Not yet handed off, so the screen must not claim the AI has stopped.
+    expect(screen.queryByText(t('thread.handedOff'))).toBeNull();
+  });
+
+  it('T16: sends needsHuman true with the status the screen is showing', async () => {
+    // `expectedStatus` is the compare-and-set. Sending anything other than what
+    // was rendered would let this screen silently overwrite a colleague's
+    // decision made thirty seconds ago.
+    mockFetch.mockResolvedValueOnce(ok(thread({ status: 'open' })));
+    render(<ConversationThread draftId="d1" />);
+
+    mockFetch.mockResolvedValueOnce(ok({ conversation: {} }));
+    andReload('needs_human');
+    await clickHandoff(t('thread.handoff'));
+
+    const call = mockFetch.mock.calls.find((c) => String(c[0]).includes('/handoff'));
+    expect(call, 'expected a POST to the handoff route').toBeTruthy();
+    expect(call![0]).toBe('/api/v1/conversations/22222222-2222-2222-2222-222222222222/handoff');
+    expect(call![1].method).toBe('POST');
+    expect(JSON.parse(call![1].body)).toEqual({ needsHuman: true, expectedStatus: 'open' });
+  });
+
+  it('T17: a handed-off conversation says so and offers the opposite action', async () => {
+    mockFetch.mockResolvedValueOnce(ok(thread({ status: 'needs_human' })));
+    render(<ConversationThread draftId="d1" />);
+
+    expect(await screen.findByText(t('thread.handedOff'))).toBeTruthy();
+    expect(screen.getByRole('button', { name: t('thread.returnToAi') })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: t('thread.handoff') })).toBeNull();
+  });
+
+  it('T18: returning to the AI sends needsHuman false, not the same value twice', async () => {
+    // The direction is derived from the rendered status. A component that sent
+    // `true` from both buttons would look correct on the way out and be a
+    // no-op on the way back — the AI never restarts and nothing says why.
+    mockFetch.mockResolvedValueOnce(ok(thread({ status: 'needs_human' })));
+    render(<ConversationThread draftId="d1" />);
+
+    mockFetch.mockResolvedValueOnce(ok({ conversation: {} }));
+    andReload('open');
+    await clickHandoff(t('thread.returnToAi'));
+
+    const call = mockFetch.mock.calls.find((c) => String(c[0]).includes('/handoff'));
+    expect(JSON.parse(call![1].body)).toEqual({
+      needsHuman: false,
+      expectedStatus: 'needs_human',
+    });
+  });
+
+  it('T19: a closed conversation offers neither direction', async () => {
+    // The RPC refuses the transition (P3C05). Showing a button that can only
+    // fail teaches a reviewer to ignore error messages.
+    mockFetch.mockResolvedValueOnce(ok(thread({ status: 'closed' })));
+    render(<ConversationThread draftId="d1" />);
+
+    await screen.findByText('¿Tienen pan integral?');
+    expect(screen.queryByRole('button', { name: t('thread.handoff') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('thread.returnToAi') })).toBeNull();
+  });
+
+  it('T20: a refusal is shown in Spanish, not swallowed', async () => {
+    // Silence here is the worst outcome: the reviewer believes the AI is off
+    // for this customer and it is not.
+    mockFetch.mockResolvedValueOnce(ok(thread({ status: 'open' })));
+    render(<ConversationThread draftId="d1" />);
+
+    mockFetch.mockResolvedValueOnce(err(409, 'ASSIGNMENT_CONFLICT'));
+    andReload('needs_human');
+    await clickHandoff(t('thread.handoff'));
+
+    expect(await screen.findByText(t('errors.ASSIGNMENT_CONFLICT'))).toBeTruthy();
+  });
+
+  it('T21: re-reads the conversation afterwards, so the screen is not left stale', async () => {
+    mockFetch.mockResolvedValueOnce(ok(thread({ status: 'open' })));
+    render(<ConversationThread draftId="d1" />);
+    await screen.findByRole('button', { name: t('thread.handoff') });
+
+    mockFetch.mockResolvedValueOnce(ok({ conversation: {} }));
+    andReload('needs_human');
+    await clickHandoff(t('thread.handoff'));
+
+    // The reload is what turns the button around. Without it the screen still
+    // offers "hand off" on a conversation already handed off, and the next
+    // click sends a stale expectedStatus and is refused.
+    expect(await screen.findByRole('button', { name: t('thread.returnToAi') })).toBeTruthy();
+    expect(await screen.findByText(t('thread.handedOff'))).toBeTruthy();
+  });
+
+  it('T21b: a refusal survives a conversation someone else closed meanwhile', async () => {
+    // The control is hidden on a closed conversation. If the refusal were
+    // rendered inside that block it would vanish with the button, and the
+    // reviewer would be left with a screen that says nothing about the action
+    // they just took — T20's failure, one step further along.
+    mockFetch.mockResolvedValueOnce(ok(thread({ status: 'open' })));
+    render(<ConversationThread draftId="d1" />);
+
+    mockFetch.mockResolvedValueOnce(err(422, 'INVALID_STATUS_TRANSITION'));
+    andReload('closed');
+    await clickHandoff(t('thread.handoff'));
+
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.getByText(t('errors.INVALID_STATUS_TRANSITION'))).toBeTruthy();
+  });
+
+  it('T21c: a later successful handoff clears the earlier refusal', async () => {
+    // A stale error about an action that then succeeded is worse than none:
+    // the reviewer reads "that did not happen" about the thing that did, and
+    // the thing in question is whether the AI is drafting to a customer.
+    mockFetch.mockResolvedValueOnce(ok(thread({ status: 'open' })));
+    render(<ConversationThread draftId="d1" />);
+
+    mockFetch.mockResolvedValueOnce(err(409, 'ASSIGNMENT_CONFLICT'));
+    andReload('open');
+    await clickHandoff(t('thread.handoff'));
+    await screen.findByText(t('errors.ASSIGNMENT_CONFLICT'));
+
+    mockFetch.mockResolvedValueOnce(ok({ conversation: {} }));
+    andReload('needs_human');
+    await clickHandoff(t('thread.handoff'));
+
+    await screen.findByRole('button', { name: t('thread.returnToAi') });
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('T22: a network failure is reported rather than leaving the button dead', async () => {
+    mockFetch.mockResolvedValueOnce(ok(thread({ status: 'open' })));
+    render(<ConversationThread draftId="d1" />);
+
+    mockFetch.mockRejectedValueOnce(new Error('offline'));
+    andReload('open');
+    await clickHandoff(t('thread.handoff'));
+
+    expect(await screen.findByText(t('thread.handoffFailed'))).toBeTruthy();
+  });
+});
+
 describe('what the thread must never offer', () => {
   it('T13: renders no send or WhatsApp control', async () => {
     // Amendment 7, asserted here by name because this is the screen in the

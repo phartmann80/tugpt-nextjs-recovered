@@ -14,6 +14,24 @@ const ERROR_MAP: Record<string, MappedError> = {
   P3B03: { status: 409, code: 'STALE_VERSION', message: 'This draft has been modified by another reviewer. Please reload and try again.' },
   P3B04: { status: 422, code: 'INVALID_STATE_TRANSITION', message: 'This draft cannot be modified in its current state' },
   P3B05: { status: 422, code: 'INVALID_BODY', message: 'The draft body must not be empty' },
+
+  // Conversation operations — assignment and handoff (migration 20260901000002).
+  //
+  // A separate range from P3B0x on purpose. Those are the draft-review codes and
+  // the messages above talk about drafts; "this draft has been modified by
+  // another reviewer" is the wrong sentence for a conversation someone else has
+  // claimed, and reusing P3B03 for it would have put that sentence on screen.
+  //
+  // This file is still called `draft-api/error-mapper.ts` and still exports
+  // `knownDraftErrorCodes`. It is now the mapper for every RPC SQLSTATE the API
+  // surfaces, not just the draft ones, and the name is behind the fact.
+  // Renaming it touches every route plus the dictionary guard, which is a
+  // change worth making on its own rather than inside a migration PR.
+  P3C01: { status: 404, code: 'CONVERSATION_NOT_FOUND', message: 'Conversation not found' },
+  P3C02: { status: 403, code: 'FORBIDDEN', message: 'You do not have permission to perform this action' },
+  P3C03: { status: 422, code: 'ASSIGNEE_NOT_A_MEMBER', message: 'That person is not a member of this organization' },
+  P3C04: { status: 409, code: 'ASSIGNMENT_CONFLICT', message: 'Someone else changed this conversation first. Please reload and try again.' },
+  P3C05: { status: 422, code: 'INVALID_STATUS_TRANSITION', message: 'This conversation cannot be changed in its current state' },
 };
 
 const UNKNOWN_ERROR: MappedError = {
