@@ -29,14 +29,35 @@ import Link from 'next/link';
 import { useT } from '@/i18n/provider';
 import { formatDateTime } from '@/i18n';
 import { apiErrorText } from '@/lib/draft-api/error-text';
-import { INBOX_FILTERS, type InboxFilter, type InboxPage } from '@/lib/conversations/types';
+import {
+  INBOX_ASSIGNMENTS,
+  INBOX_FILTERS,
+  type InboxAssignment,
+  type InboxFilter,
+  type InboxPage,
+} from '@/lib/conversations/types';
 
-export function ConversationInbox() {
+export function ConversationInbox({ viewerId }: { viewerId: string | null }) {
   const t = useT();
   const [page, setPage] = useState<InboxPage | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<InboxFilter>('all');
+  const [assignment, setAssignment] = useState<InboxAssignment>('all');
+  // The conversation whose claim/release request is in flight, so one row can
+  // show progress without freezing the rest of the list.
+  const [pending, setPending] = useState<string | null>(null);
+  /**
+   * Kept apart from `error` for two reasons, both of which were live bugs.
+   *
+   * A claim always reloads the list afterwards, and a successful reload sets
+   * `error` back to null — so a refusal appeared and was wiped a few
+   * milliseconds later. And `error` hides the list entirely: a conflict on one
+   * row replaced the whole inbox with an error panel, then flickered back.
+   *
+   * A refused claim is a message about one row, not a failure of the screen.
+   */
+  const [assignError, setAssignError] = useState<string | null>(null);
   // The cursors used to reach the current page, oldest first. `undefined` at
   // the top is the first page. Kept as a stack rather than recomputed, because
   // a keyset cursor cannot be derived backwards — the only way to know where
@@ -53,6 +74,7 @@ export function ConversationInbox() {
       try {
         const params = new URLSearchParams();
         if (filter !== 'all') params.set('status', filter);
+        if (assignment !== 'all') params.set('assignment', assignment);
         if (cursor) params.set('cursor', cursor);
         const query = params.toString();
 
@@ -81,17 +103,58 @@ export function ConversationInbox() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, cursor, attempt]);
+  }, [filter, assignment, cursor, attempt]);
 
   const changeFilter = useCallback((next: InboxFilter) => {
     setLoading(true);
     setError(null);
+    setAssignError(null);
     // A cursor names a position in one ordering of one filter. Carrying it
     // across a filter change would resume in the middle of a list the reviewer
     // has not seen the start of.
     setTrail([]);
     setFilter(next);
   }, []);
+
+  const changeAssignment = useCallback((next: InboxAssignment) => {
+    setLoading(true);
+    setError(null);
+    setAssignError(null);
+    setTrail([]);
+    setAssignment(next);
+  }, []);
+
+  /**
+   * Claim or release one conversation.
+   *
+   * `expectedAssignee` is what this browser is currently showing. If somebody
+   * else claimed it since the page loaded, the server refuses and the reviewer
+   * is told, rather than quietly taking a conversation out from under them.
+   * The reload afterwards is the other half: the row comes back showing who
+   * actually has it, beside the message saying the claim did not happen.
+   */
+  const setAssignee = useCallback(
+    async (conversationId: string, assignee: string | null, expectedAssignee: string | null) => {
+      setPending(conversationId);
+      setAssignError(null);
+      try {
+        const res = await fetch(`/api/v1/conversations/${conversationId}/assign`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ assignee, expectedAssignee }),
+        });
+        if (!res.ok) {
+          setAssignError(apiErrorText(t, await res.json()));
+        }
+      } catch {
+        setAssignError(t('inbox.claimFailed'));
+      } finally {
+        setPending(null);
+        setAttempt((n) => n + 1);
+      }
+    },
+    [t]
+  );
 
   const goNext = useCallback(() => {
     if (!page?.next_cursor) return;
@@ -107,6 +170,7 @@ export function ConversationInbox() {
   const retry = useCallback(() => {
     setLoading(true);
     setError(null);
+    setAssignError(null);
     // A counter, not a toggle: setting a value to itself is a no-op React
     // optimises away, which is the bug the draft inbox shipped with for months.
     setAttempt((n) => n + 1);
@@ -116,7 +180,13 @@ export function ConversationInbox() {
     <section>
       <h1 className="mb-4 text-2xl font-semibold text-zinc-900">{t('inbox.title')}</h1>
 
-      <div className="mb-4 flex flex-wrap gap-2">
+      {/*
+        Two chip rows, each a labelled group. Without the labels a screen
+        reader announces two rows of unrelated-looking buttons; with the
+        assignment row also using "All", it announced two buttons with the
+        same name and no way to tell them apart.
+      */}
+      <div className="mb-4 flex flex-wrap gap-2" role="group" aria-label={t('inbox.filterByStatus')}>
         {INBOX_FILTERS.map((value) => (
           <button
             key={value}
@@ -134,6 +204,24 @@ export function ConversationInbox() {
         ))}
       </div>
 
+      <div className="mb-4 flex flex-wrap gap-2" role="group" aria-label={t('inbox.filterByAssignee')}>
+        {INBOX_ASSIGNMENTS.map((value) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => changeAssignment(value)}
+            aria-pressed={assignment === value}
+            className={`rounded-full border px-3 py-1 text-sm transition ${
+              assignment === value
+                ? 'border-sky-700 bg-sky-700 text-white'
+                : 'border-zinc-300 text-zinc-700 hover:bg-zinc-100'
+            }`}
+          >
+            {value === 'all' ? t('inbox.assignment.all') : t(`inbox.filter.${value}`)}
+          </button>
+        ))}
+      </div>
+
       {loading && <p className="text-sm text-zinc-500">{t('inbox.loading')}</p>}
 
       {!loading && error && (
@@ -147,6 +235,24 @@ export function ConversationInbox() {
             {t('inbox.retry')}
           </button>
         </div>
+      )}
+
+      {/*
+        Outside the `!error` block below on purpose. A refused claim is a fact
+        about one row, not a failure of the screen: replacing the whole inbox
+        with an error panel loses the very list the reviewer needs in order to
+        see who took the conversation.
+
+        role="alert" because it appears in response to a click the reviewer has
+        already looked away from, and what it says is "that did not happen".
+      */}
+      {assignError && (
+        <p
+          role="alert"
+          className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700"
+        >
+          {assignError}
+        </p>
       )}
 
       {!loading && !error && page && (
@@ -181,8 +287,15 @@ export function ConversationInbox() {
                   </span>
                 );
 
+                const mine = c.assigned_to !== null && c.assigned_to.id === viewerId;
+                const assigneeLabel = c.assigned_to
+                  ? mine
+                    ? t('inbox.assignedToYou')
+                    : t('inbox.assignedTo', { name: c.assigned_to.display })
+                  : t('inbox.unassigned');
+
                 return (
-                  <li key={c.id}>
+                  <li key={c.id} className="flex flex-wrap items-center justify-between gap-2 pr-4">
                     {/*
                       A row opens the draft waiting on it. A conversation with
                       nothing to review is shown and is not a link, because
@@ -194,13 +307,44 @@ export function ConversationInbox() {
                     {c.awaiting_draft_id ? (
                       <Link
                         href={`/dashboard/drafts/${c.awaiting_draft_id}`}
-                        className="block transition hover:bg-zinc-50"
+                        className="block flex-1 transition hover:bg-zinc-50"
                       >
                         {row}
                       </Link>
                     ) : (
-                      <span className="block">{row}</span>
+                      <span className="block flex-1">{row}</span>
                     )}
+
+                    <span className="flex shrink-0 items-center gap-2">
+                      <span className="text-xs text-zinc-500">{assigneeLabel}</span>
+                      {/*
+                        One control, two meanings: claim what nobody has, release
+                        what is yours. A conversation somebody else has claimed
+                        shows no button at all — taking it off a colleague is a
+                        different decision from picking up an unclaimed one, and
+                        it is not one this screen offers by accident.
+                      */}
+                      {viewerId && (c.assigned_to === null || mine) && (
+                        <button
+                          type="button"
+                          disabled={pending === c.id}
+                          onClick={() =>
+                            setAssignee(
+                              c.id,
+                              mine ? null : viewerId,
+                              c.assigned_to ? c.assigned_to.id : null
+                            )
+                          }
+                          className="rounded border border-zinc-300 px-2 py-1 text-xs text-zinc-700 transition hover:bg-zinc-100 disabled:opacity-50"
+                        >
+                          {pending === c.id
+                            ? t('inbox.claiming')
+                            : mine
+                              ? t('inbox.release')
+                              : t('inbox.claim')}
+                        </button>
+                      )}
+                    </span>
                   </li>
                 );
               })}

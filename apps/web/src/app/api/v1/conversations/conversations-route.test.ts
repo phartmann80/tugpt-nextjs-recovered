@@ -36,6 +36,7 @@ const orderCalls: Record<string, Array<[string, unknown]>> = {};
 const limitCalls: Record<string, number[]> = {};
 const orCalls: Record<string, string[]> = {};
 const inCalls: Record<string, Array<[string, unknown]>> = {};
+const isCalls: Record<string, Array<[string, unknown]>> = {};
 
 const mockFrom = vi.fn((table: string) => {
   selectCalls[table] ??= [];
@@ -44,6 +45,7 @@ const mockFrom = vi.fn((table: string) => {
   limitCalls[table] ??= [];
   orCalls[table] ??= [];
   inCalls[table] ??= [];
+  isCalls[table] ??= [];
 
   const chain: Record<string, unknown> = {};
   chain.select = vi.fn((cols: string) => {
@@ -56,6 +58,10 @@ const mockFrom = vi.fn((table: string) => {
   });
   chain.or = vi.fn((expr: string) => {
     orCalls[table].push(expr);
+    return chain;
+  });
+  chain.is = vi.fn((col: string, val: unknown) => {
+    isCalls[table].push([col, val]);
     return chain;
   });
   chain.order = vi.fn((col: string, opts: unknown) => {
@@ -115,9 +121,14 @@ function conversationRows(count: number, overrides: Record<string, unknown> = {}
 }
 
 function setup(
-  opts: { conversations?: unknown[]; draftRows?: unknown[]; gateOpen?: boolean } = {}
+  opts: {
+    conversations?: unknown[];
+    draftRows?: unknown[];
+    profileRows?: unknown[];
+    gateOpen?: boolean;
+  } = {}
 ) {
-  for (const bag of [tables, selectCalls, eqCalls, orderCalls, limitCalls, orCalls, inCalls]) {
+  for (const bag of [tables, selectCalls, eqCalls, orderCalls, limitCalls, orCalls, inCalls, isCalls]) {
     for (const k of Object.keys(bag)) delete (bag as Record<string, unknown>)[k];
   }
   vi.clearAllMocks();
@@ -134,6 +145,7 @@ function setup(
     limit: { data: opts.conversations ?? conversationRows(3), error: null },
   };
   tables['ai_drafts'] = { in: { data: opts.draftRows ?? [], error: null } };
+  tables['profiles'] = { in: { data: opts.profileRows ?? [], error: null } };
 }
 
 function request(query = '') {
@@ -188,7 +200,9 @@ describe('what the response is allowed to contain', () => {
     // The other half of T2, one level earlier: T2 passes if the route strips
     // extra columns after fetching them, this fails if they are fetched.
     await call();
-    expect(selectCalls['conversations'][0]).toBe('id, contact_phone, status, activity_at');
+    expect(selectCalls['conversations'][0]).toBe(
+      'id, contact_phone, status, activity_at, assigned_to'
+    );
     expect(selectCalls['conversations'][0]).not.toContain('*');
   });
 
@@ -323,6 +337,30 @@ describe('filtering and scoping', () => {
     expect(limitCalls['conversations']).toEqual([26]);
   });
 
+  it('T19b: filters to unassigned with IS NULL, not an equality on null', async () => {
+    await call('?assignment=unassigned');
+    expect(isCalls['conversations']).toContainEqual(['assigned_to', null]);
+  });
+
+  it('T19c: filters to mine using the signed-in reviewer, never a client-supplied id', async () => {
+    // The viewer comes from the session, not the query string. A caller that
+    // could name the reviewer could read someone else's queue.
+    await call('?assignment=mine');
+    expect(eqCalls['conversations']).toContainEqual(['assigned_to', 'user-1']);
+  });
+
+  it('T19d: applies no assignment filter by default', async () => {
+    await call();
+    expect(isCalls['conversations']).toEqual([]);
+    expect(eqCalls['conversations'].map(([c]) => c)).not.toContain('assigned_to');
+  });
+
+  it('T19e: refuses an assignment filter outside the vocabulary', async () => {
+    const { res, body } = await call('?assignment=everyone');
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe('INVALID_QUERY');
+  });
+
   it('T20: refuses a malformed cursor rather than silently returning page one', async () => {
     // The deliberate asymmetry with T19. A limit is how the answer is
     // presented; a cursor is part of the question. Ignoring it answers a
@@ -397,6 +435,38 @@ describe('what is waiting for review', () => {
     expect(mockFrom.mock.calls.filter((c) => c[0] === 'ai_drafts')).toHaveLength(1);
     // And it asks only for what it needs from that table.
     expect(selectCalls['ai_drafts'][0]).toBe('id, conversation_id, created_at');
+  });
+
+  it('T23b: resolves assignee names once per page, deduplicated', async () => {
+    setup({
+      conversations: conversationRows(4, { assigned_to: 'reviewer-1' }),
+      profileRows: [{ id: 'reviewer-1', full_name: 'Ana Reviewer', email: 'ana@example.com' }],
+    });
+    const { body } = await call();
+
+    expect(inCalls['profiles']).toHaveLength(1);
+    expect((inCalls['profiles'][0][1] as string[])).toEqual(['reviewer-1']);
+    expect(body.conversations[0].assigned_to).toEqual({ id: 'reviewer-1', display: 'Ana Reviewer' });
+  });
+
+  it('T23c: falls back to email, then to the id, rather than rendering blank', async () => {
+    setup({
+      conversations: [
+        { ...conversationRows(1)[0], assigned_to: 'no-name' },
+        { ...conversationRows(1)[0], id: CONV(7), assigned_to: 'no-profile' },
+      ],
+      profileRows: [{ id: 'no-name', full_name: null, email: 'someone@example.com' }],
+    });
+    const { body } = await call();
+
+    expect(body.conversations[0].assigned_to.display).toBe('someone@example.com');
+    expect(body.conversations[1].assigned_to.display).toBe('no-profile');
+  });
+
+  it('T23d: does not query profiles when nothing on the page is assigned', async () => {
+    setup({ conversations: conversationRows(3) });
+    await call();
+    expect(mockFrom.mock.calls.filter((c) => c[0] === 'profiles')).toHaveLength(0);
   });
 
   it('T24: does not query drafts at all for an empty page', async () => {
