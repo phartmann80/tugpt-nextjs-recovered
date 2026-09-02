@@ -53,7 +53,7 @@ VALUES (
   'd1d1d1d1-d1d1-d1d1-d1d1-d1d1d1d1d1d1',
   'wrong_user@example.com',
   'agent',
-  'tok_wrong_email_123',
+  private.hash_invitation_token('tok_wrong_email_123'),
   '11111111-1111-1111-1111-111111111111',
   NOW() + INTERVAL '1 day'
 );
@@ -63,9 +63,9 @@ SELECT set_config('request.jwt.claims', '{"sub":"33333333-3333-3333-3333-3333333
 SET LOCAL ROLE authenticated;
 
 SELECT throws_ok(
-  $$SELECT public.accept_invitation('tok_wrong_email_123', '33333333-3333-3333-3333-333333333333')$$,
-  'P0001',
-  'Invitation email identity mismatch',
+  $$SELECT public.accept_invitation('tok_wrong_email_123')$$,
+  'P3D06',
+  'Invitation was issued to a different address',
   'Test 1: Rejects accepting an invitation where email identity does not match'
 );
 
@@ -74,24 +74,28 @@ SELECT throws_ok(
 -- TEST 2: Expired invitation rejection
 -- =============================================================================
 SET LOCAL ROLE postgres;
-INSERT INTO public.organization_invitations (id, organization_id, email, role, token_hash, invited_by, expires_at)
+INSERT INTO public.organization_invitations (id, organization_id, email, role, token_hash, invited_by, expires_at, created_at)
 VALUES (
   'e2e2e2e2-e2e2-e2e2-e2e2-e2e2e2e2e2e2',
   'd1d1d1d1-d1d1-d1d1-d1d1-d1d1d1d1d1d1',
   'invitee_c@example.com',
   'agent',
-  'tok_expired_123',
+  private.hash_invitation_token('tok_expired_123'),
   '11111111-1111-1111-1111-111111111111',
-  NOW() - INTERVAL '1 hour'
+  NOW() - INTERVAL '1 hour',
+  -- created_at is backdated too: organization_invitations_expiry_bounded
+  -- (20260902000001) requires expires_at > created_at, and this fixture is
+  -- deliberately already expired.
+  NOW() - INTERVAL '2 days'
 );
 
 SELECT set_config('request.jwt.claims', '{"sub":"33333333-3333-3333-3333-333333333333","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 
 SELECT throws_ok(
-  $$SELECT public.accept_invitation('tok_expired_123', '33333333-3333-3333-3333-333333333333')$$,
-  'P0001',
-  'Invitation token has expired',
+  $$SELECT public.accept_invitation('tok_expired_123')$$,
+  'P3D05',
+  'Invitation has expired',
   'Test 2: Rejects accepting an expired invitation token'
 );
 
@@ -100,13 +104,24 @@ SELECT throws_ok(
 -- TEST 3: Replay prevention (cannot accept twice)
 -- =============================================================================
 SET LOCAL ROLE postgres;
+
+-- Retire Test 2's lapsed invitation before seeding another for the same
+-- address. `idx_org_invitations_one_pending_per_email` (20260902000001) allows
+-- one pending invitation per address per organization, and Test 2's row is
+-- still pending: accept_invitation cannot mark it expired, because the RAISE
+-- that follows would roll the mark back. In production create_invitation
+-- sweeps it on the way past; these fixtures insert directly, so the sweep is
+-- done by hand here.
+UPDATE public.organization_invitations
+SET status = 'expired'
+WHERE id = 'e2e2e2e2-e2e2-e2e2-e2e2-e2e2e2e2e2e2';
 INSERT INTO public.organization_invitations (id, organization_id, email, role, token_hash, invited_by, expires_at)
 VALUES (
   'e3e3e3e3-e3e3-e3e3-e3e3-e3e3e3e3e3e3',
   'd1d1d1d1-d1d1-d1d1-d1d1-d1d1d1d1d1d1',
   'invitee_c@example.com',
   'agent',
-  'tok_valid_123',
+  private.hash_invitation_token('tok_valid_123'),
   '11111111-1111-1111-1111-111111111111',
   NOW() + INTERVAL '1 day'
 );
@@ -116,15 +131,15 @@ SELECT set_config('request.jwt.claims', '{"sub":"33333333-3333-3333-3333-3333333
 SET LOCAL ROLE authenticated;
 
 SELECT is(
-  (SELECT public.accept_invitation('tok_valid_123', '33333333-3333-3333-3333-333333333333')),
+  (SELECT (public.accept_invitation('tok_valid_123') ->> 'membership_created')::boolean),
   true,
-  'Test 3a: Successfully accepts valid invitation'
+  'Test 3a: Successfully accepts valid invitation and creates the membership'
 );
 
 -- Try to accept again (replay)
 SELECT throws_ok(
-  $$SELECT public.accept_invitation('tok_valid_123', '33333333-3333-3333-3333-333333333333')$$,
-  'P0001',
+  $$SELECT public.accept_invitation('tok_valid_123')$$,
+  'P3D04',
   'Invitation is no longer pending',
   'Test 3b: Blocks accepting the invitation a second time'
 );

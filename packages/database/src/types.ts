@@ -1,7 +1,7 @@
 import type { OrganizationLocale } from './locales';
 
 export type OrganizationRole = 'owner' | 'admin' | 'manager' | 'agent' | 'viewer';
-export type InvitationStatus = 'pending' | 'accepted' | 'declined' | 'expired';
+export type InvitationStatus = 'pending' | 'accepted' | 'declined' | 'expired' | 'revoked';
 
 export interface Profile {
   id: string;
@@ -44,8 +44,14 @@ export interface OrganizationMember {
 export interface OrganizationInvitation {
   id: string;
   organization_id: string;
+  /** Always stored lowercased and trimmed by `create_invitation`. */
   email: string;
   role: OrganizationRole;
+  /**
+   * SHA-256 of the token, hex. Never the token itself, and never presentable:
+   * `accept_invitation` hashes what it is given, so sending this value back
+   * does not accept the invitation (20260902000001).
+   */
   token_hash: string;
   status: InvitationStatus;
   invited_by: string;
@@ -297,8 +303,11 @@ export interface Database {
       };
       organization_invitations: {
         Row: OrganizationInvitation;
-        Insert: Omit<OrganizationInvitation, 'id' | 'created_at' | 'updated_at'> & { id?: string; created_at?: string; updated_at?: string };
-        Update: Partial<OrganizationInvitation>;
+        // Read-only from the application as of 20260902000001: `authenticated`
+        // holds SELECT and nothing else, and every write goes through
+        // create_invitation / revoke_invitation / accept_invitation.
+        Insert: never;
+        Update: never;
       };
       audit_logs: {
         Row: AuditLog;
@@ -506,6 +515,41 @@ export interface Database {
           version: number;
           rejected_at: string | null;
           rejected_by: string | null;
+        };
+      };
+      /**
+       * Returns the plaintext token exactly once. It is not stored and cannot
+       * be recovered; a lost token means revoke and reissue.
+       */
+      create_invitation: {
+        Args: {
+          p_organization_id: string;
+          p_email: string;
+          p_role: OrganizationRole;
+        };
+        Returns: {
+          invitation_id: string;
+          token: string;
+          email: string;
+          role: OrganizationRole;
+          expires_at: string;
+        };
+      };
+      revoke_invitation: {
+        Args: { p_invitation_id: string };
+        Returns: { invitation_id: string; status: 'revoked' };
+      };
+      /**
+       * Takes the PLAINTEXT token, not the stored hash. `role` is the role the
+       * caller actually holds afterwards, which is not necessarily the invited
+       * role: an existing membership is never rewritten.
+       */
+      accept_invitation: {
+        Args: { p_token: string };
+        Returns: {
+          organization_id: string;
+          membership_created: boolean;
+          role: OrganizationRole;
         };
       };
       is_feature_enabled: {

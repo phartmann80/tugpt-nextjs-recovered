@@ -151,5 +151,13 @@ export const en: Dictionary = {
     'Another reviewer changed this draft. Reload and try again.',
   'errors.INVALID_STATE_TRANSITION': 'This draft cannot be modified in its current state',
   'errors.INVALID_BODY': 'The draft must not be empty',
+  'errors.INVITATION_NOT_FOUND': 'Invitation not found',
+  'errors.INVITATION_ALREADY_PENDING': 'That address already has a pending invitation. Revoke it before sending another.',
+  'errors.INVITATION_NOT_PENDING': 'This invitation has already been used or withdrawn',
+  'errors.INVITATION_EXPIRED': 'This invitation has expired. Ask for a new one.',
+  'errors.INVITATION_WRONG_ACCOUNT': 'This invitation was sent to a different email address. Sign in with that address to accept it.',
+  'errors.ALREADY_A_MEMBER': 'That person is already in this organization',
+  'errors.ROLE_ABOVE_YOUR_OWN': 'You cannot invite someone at a role above your own',
+  'errors.INVALID_EMAIL': 'That is not a valid email address',
   'errors.INTERNAL_ERROR': 'An unexpected error occurred',
 };

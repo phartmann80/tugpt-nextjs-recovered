@@ -180,6 +180,35 @@ const ROUTES: RouteExpectation[] = [
       'at all, asserted in conversations-route.test.ts.',
   },
   {
+    path: '/api/v1/invitations',
+    kind: 'api',
+    type: 'public',
+    why:
+      'Handler authenticates and resolves tenant; create_invitation derives the ' +
+      'organization from the caller\'s membership row and enforces role, rank and ' +
+      'uniqueness. POST returns the one-time invitation token, which is why its ' +
+      'logging is asserted field-by-field in invitation-routes.test.ts.',
+  },
+  {
+    path: '/api/v1/invitations/[invitationId]/revoke',
+    kind: 'api',
+    type: 'public',
+    why:
+      'Handler authenticates; revoke_invitation owns membership and role, and ' +
+      'answers P3D01 for another tenant\'s invitation so ids cannot be probed.',
+  },
+  {
+    path: '/api/v1/invitations/accept',
+    kind: 'api',
+    type: 'public',
+    why:
+      'Handler authenticates but deliberately resolves NO tenant: the caller is ' +
+      'joining an organization they are not yet a member of, so the token carries ' +
+      'the tenant and the RPC reads it from the locked row. The only route where ' +
+      'the body rather than the session names the organization, which is why the ' +
+      'token is a 244-bit server-generated secret.',
+  },
+  {
     path: '/api/v1/drafts/[draftId]/revisions',
     kind: 'api',
     type: 'public',
