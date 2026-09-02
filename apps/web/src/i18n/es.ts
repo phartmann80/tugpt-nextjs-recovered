@@ -168,5 +168,13 @@ export const es = {
   'errors.INVALID_STATE_TRANSITION':
     'Este borrador no se puede modificar en su estado actual',
   'errors.INVALID_BODY': 'El borrador no puede quedar vacío',
+  'errors.INVITATION_NOT_FOUND': 'No se encontró la invitación',
+  'errors.INVITATION_ALREADY_PENDING': 'Esa dirección ya tiene una invitación pendiente. Cancélela antes de enviar otra.',
+  'errors.INVITATION_NOT_PENDING': 'Esta invitación ya fue usada o retirada',
+  'errors.INVITATION_EXPIRED': 'Esta invitación venció. Pida una nueva.',
+  'errors.INVITATION_WRONG_ACCOUNT': 'Esta invitación se envió a otro correo. Inicie sesión con esa dirección para aceptarla.',
+  'errors.ALREADY_A_MEMBER': 'Esa persona ya pertenece a esta organización',
+  'errors.ROLE_ABOVE_YOUR_OWN': 'No puede invitar a alguien con un rol superior al suyo',
+  'errors.INVALID_EMAIL': 'Esa dirección de correo no es válida',
   'errors.INTERNAL_ERROR': 'Ocurrió un error inesperado',
 } as const;

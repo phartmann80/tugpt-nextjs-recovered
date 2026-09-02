@@ -2,7 +2,7 @@
 
 **Status:** active
 **Gate:** CI job `database-tests` in `.github/workflows/ci.yml`
-**Files:** `supabase/tests/database/*.sql` — 24 files, ~430 pgTAP assertions
+**Files:** `supabase/tests/database/*.sql` — 25 files, ~470 pgTAP assertions
 
 ## Why this document exists
 
@@ -59,6 +59,7 @@ container — use it after adding a migration rather than restarting.
 | `webhook_ingestion.test.sql`, `worker_processing.test.sql`, `queue_read_visibility.test.sql`, `dead_letter.test.sql`, `conversation_lifecycle.test.sql` | the inbound path and PGMQ semantics |
 | `phase3b_feature_flag_rls.test.sql` | `is_feature_enabled` and its RLS |
 | `invitations_and_ownership.test.sql` | membership lifecycle, double-acceptance protection |
+| `invitation_security.test.sql` | the 20260902000001 security model: that `authenticated` can no longer write the invitations table directly (the hole this closed), the rank ceiling on who may be invited, that a stored `token_hash` is not presentable as a token, that accepting never rewrites an existing membership role in either direction, and that cross-tenant probing of organization and invitation ids gets one answer |
 | `conversation_activity_ordering.test.sql` | `conversations.activity_at` — that it falls back to `created_at`, that it is generated and unwritable, and that ordering on `last_message_at` still gives the wrong answer (the reason the column exists) |
 | `ai_draft_config_defaults.test.sql` | that a config nobody wrote is Spanish and usable, that `business_instructions` stays empty because it has no true generic value, and that the backfill left written configs alone |
 | `organizations_locale.test.sql` | the locale vocabulary: `organizations.locale` defaults to `es`, permits `en`, refuses anything else and is case-sensitive; the same for `profiles.preferred_locale` (ADR-017) |

@@ -49,6 +49,13 @@ const PUBLIC_PREFIXES: readonly string[] = [
   '/api/v1/drafts',
   '/api/v1/organizations',
   '/api/v1/conversations',
+  // Same shape as the others — each handler authenticates for itself and the
+  // RPCs enforce membership and role. `/api/v1/invitations/accept` is the one
+  // that must be here rather than 'protected': the proxy's protected path
+  // resolves an active organization, and an invitee accepting an invitation
+  // has none yet for the organization they are joining. It still requires a
+  // session; the handler returns 401 without one.
+  '/api/v1/invitations',
 ];
 
 /**
