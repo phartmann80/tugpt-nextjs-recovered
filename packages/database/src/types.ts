@@ -253,6 +253,53 @@ export interface Conversation {
    * carried no readable timestamp sorts above every recent one.
    */
   activity_at: string;
+  /**
+   * The {@link Contact} this thread is with. Non-null and maintained by the
+   * database: a trigger sets it from `(organization_id, contact_phone)` on
+   * insert, follows a change to `contact_phone`, and rejects (SQLSTATE
+   * `P3E02`) any attempt to point a conversation at a different contact
+   * (migration 20260902000002).
+   *
+   * `contact_phone` above is the same fact and is kept for its existing
+   * readers. Prefer joining through this column in new code — the phone column
+   * is scheduled to go once those readers move.
+   */
+  contact_id: string;
+}
+
+/**
+ * A person an organization talks to.
+ *
+ * Identity is `(organization_id, phone)` and deliberately NOT scoped to a
+ * WhatsApp number: a business with a sales line and a support line that both
+ * hear from the same human holds ONE contact, not two. Conversations remain
+ * per-number; the person does not.
+ *
+ * Read-only from the application. Rows are created by the ingest path under
+ * the definer, and `authenticated` holds `SELECT` and nothing else.
+ */
+export interface Contact {
+  id: string;
+  organization_id: string;
+  /**
+   * The WhatsApp identifier as the provider gives it, not normalised to E.164
+   * — inbound messages arrive with this value and conversations are matched on
+   * it.
+   *
+   * Immutable: the database rejects an update with SQLSTATE `P3E01`. A
+   * different number is a different person, which is an insert and a merge,
+   * not an edit.
+   */
+  phone: string;
+  /**
+   * Null until somebody supplies one. Left null rather than defaulted, so a
+   * missing name stays distinguishable from a name that happens to read like a
+   * placeholder.
+   */
+  display_name: string | null;
+  created_at: string;
+  /** When the row was last *edited* — not when the contact last messaged. */
+  updated_at: string;
 }
 
 export interface Message {
@@ -341,8 +388,23 @@ export interface Database {
       };
       conversations: {
         Row: Conversation;
-        Insert: Omit<Conversation, 'id' | 'created_at' | 'updated_at'> & { id?: string; created_at?: string; updated_at?: string };
+        // `activity_at` and `contact_id` are maintained by the database — the
+        // first is a generated column that rejects writes, the second is set
+        // by a trigger from (organization_id, contact_phone). Requiring either
+        // on insert would make the type demand a value the database will not
+        // accept, so both are optional here and omitted in practice.
+        Insert: Omit<Conversation, 'id' | 'created_at' | 'updated_at' | 'activity_at' | 'contact_id'>
+          & { id?: string; created_at?: string; updated_at?: string; activity_at?: never; contact_id?: string };
         Update: Partial<Conversation>;
+      };
+      contacts: {
+        Row: Contact;
+        // No Insert/Update surface that differs from the row: the application
+        // holds SELECT only. The shapes are here so a service-role caller is
+        // typed, not because anything in the app writes this table.
+        Insert: Omit<Contact, 'id' | 'created_at' | 'updated_at'>
+          & { id?: string; created_at?: string; updated_at?: string };
+        Update: Partial<Omit<Contact, 'phone'>>;
       };
       messages: {
         Row: Message;
