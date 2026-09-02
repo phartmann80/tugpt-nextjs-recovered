@@ -178,6 +178,7 @@ const ROUTES: RouteExpectation[] = [
       'draft routes before reading; every query is scoped by organization_id and RLS ' +
       'scopes conversations to org members. Returns masked contacts and no message text ' +
       'at all, asserted in conversations-route.test.ts.',
+  },
   {
     path: '/api/v1/conversations/[conversationId]/assign',
     kind: 'api',
