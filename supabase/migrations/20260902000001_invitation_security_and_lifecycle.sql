@@ -507,7 +507,8 @@ AS $$ SELECT private.accept_invitation(p_token); $$;
 
 -- This is the load-bearing statement of the migration. Everything above is
 -- only enforcement if the table cannot be written around it.
-REVOKE INSERT, UPDATE, DELETE ON public.organization_invitations FROM authenticated;
+REVOKE ALL ON public.organization_invitations FROM authenticated;
+GRANT SELECT ON public.organization_invitations TO authenticated;
 
 -- `anon` held SELECT on this table. The row policy requires
 -- `auth.role() = 'authenticated'`, so it returned nothing and the grant was

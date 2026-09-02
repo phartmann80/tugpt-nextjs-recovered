@@ -352,7 +352,8 @@ CREATE POLICY contacts_select
 GRANT SELECT ON public.contacts TO authenticated;
 GRANT SELECT, INSERT, UPDATE ON public.contacts TO service_role;
 REVOKE ALL ON public.contacts FROM anon;
-REVOKE INSERT, UPDATE, DELETE ON public.contacts FROM authenticated;
+REVOKE ALL ON public.contacts FROM authenticated;
+GRANT SELECT ON public.contacts TO authenticated;
 
 -- The definer functions are reached through the trigger, never called
 -- directly. Executable by nobody but their owner.

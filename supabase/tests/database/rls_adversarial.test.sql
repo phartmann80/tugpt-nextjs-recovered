@@ -22,7 +22,8 @@ INSERT INTO auth.users (
   ('00000000-0000-0000-0000-000000000000','44444444-4444-4444-4444-444444444444','authenticated','authenticated','agent_a@example.com',   '','2026-01-01 00:00:00','2026-01-01 00:00:00','2026-01-01 00:00:00','{}','{}',false,'','','',''),
   ('00000000-0000-0000-0000-000000000000','55555555-5555-5555-5555-555555555555','authenticated','authenticated','viewer_a@example.com',  '','2026-01-01 00:00:00','2026-01-01 00:00:00','2026-01-01 00:00:00','{}','{}',false,'','','',''),
   ('00000000-0000-0000-0000-000000000000','66666666-6666-6666-6666-666666666666','authenticated','authenticated','owner_b@example.com',   '','2026-01-01 00:00:00','2026-01-01 00:00:00','2026-01-01 00:00:00','{}','{}',false,'','','',''),
-  ('00000000-0000-0000-0000-000000000000','77777777-7777-7777-7777-777777777777','authenticated','authenticated','invitee_c@example.com', '','2026-01-01 00:00:00','2026-01-01 00:00:00','2026-01-01 00:00:00','{}','{}',false,'','','','')
+  ('00000000-0000-0000-0000-000000000000','77777777-7777-7777-7777-777777777777','authenticated','authenticated','invitee_c@example.com', '','2026-01-01 00:00:00','2026-01-01 00:00:00','2026-01-01 00:00:00','{}','{}',false,'','','',''),
+  ('00000000-0000-0000-0000-000000000000','88888888-8888-8888-8888-888888888888','authenticated','authenticated','expired_invitee@example.com', '','2026-01-01 00:00:00','2026-01-01 00:00:00','2026-01-01 00:00:00','{}','{}',false,'','','','')
 ON CONFLICT (id) DO NOTHING;
 
 -- profiles are auto-created by the handle_new_user trigger on auth.users,
@@ -50,7 +51,7 @@ ON CONFLICT (organization_id, user_id) DO NOTHING;
 
 -- Seed organization invitation
 INSERT INTO public.organization_invitations (id, organization_id, email, role, token_hash, invited_by, expires_at) VALUES
-  ('11111111-2222-3333-4444-555555555555','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'invitee_c@example.com', 'agent', 'test_token_hash_123', '11111111-1111-1111-1111-111111111111', NOW() + INTERVAL '1 day')
+  ('11111111-2222-3333-4444-555555555555','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'invitee_c@example.com', 'agent', encode(sha256(convert_to('test_token_raw_123', 'UTF8')), 'hex'), '11111111-1111-1111-1111-111111111111', NOW() + INTERVAL '1 day')
 ON CONFLICT (id) DO NOTHING;
 
 -- Seed feature flags
@@ -320,10 +321,10 @@ SELECT set_config('request.jwt.claims', '{"sub":"33333333-3333-3333-3333-3333333
 SET LOCAL ROLE authenticated;
 
 SELECT throws_ok(
-  $$INSERT INTO public.organization_invitations (organization_id, email, role, token_hash, invited_by, expires_at) VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'test_manager@example.com', 'agent', 'tok_manager', '33333333-3333-3333-3333-333333333333', NOW() + INTERVAL '1 day')$$,
-  '42501',
+  $$SELECT public.create_invitation('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'test_manager@example.com', 'agent')$$,
+  'P3D02',
   NULL,
-  'Test 20: Manager cannot create invitations (RLS throws 42501)'
+  'Test 20: Manager cannot create invitations (throws P3D02)'
 );
 
 -- =============================================================================
@@ -332,13 +333,8 @@ SELECT throws_ok(
 SELECT set_config('request.jwt.claims', '{"sub":"22222222-2222-2222-2222-222222222222","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 
-INSERT INTO public.organization_invitations (organization_id, email, role, token_hash, invited_by, expires_at) 
-VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'test_admin_invited@example.com', 'agent', 'tok_admin_123', '22222222-2222-2222-2222-222222222222', NOW() + INTERVAL '1 day');
-
-SET LOCAL ROLE postgres;
-SELECT is(
-  (SELECT COUNT(*)::int FROM public.organization_invitations WHERE token_hash = 'tok_admin_123'),
-  1,
+SELECT lives_ok(
+  $$SELECT public.create_invitation('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'test_admin_invited@example.com', 'agent')$$,
   'Test 21: Admin can create invitations'
 );
 
@@ -358,7 +354,7 @@ SET LOCAL ROLE authenticated;
 
 SELECT is(
   (SELECT COUNT(*)::int FROM public.audit_logs WHERE organization_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'),
-  1, -- 1 manually inserted (organization creation RPC is bypassed during direct INSERT seeding)
+  2, -- 1 from Test 21 create_invitation + 1 manually inserted
   'Test 22: Manager can view organization audit logs'
 );
 
@@ -447,57 +443,57 @@ SELECT lives_ok(
 );
 
 -- =============================================================================
--- TEST 30: private.accept_invitation validation: expired invitation rejection
+-- TEST 30: accept_invitation validation: expired invitation rejection
 -- =============================================================================
 SET LOCAL ROLE postgres;
-INSERT INTO public.organization_invitations (id, organization_id, email, role, token_hash, invited_by, expires_at) 
-VALUES ('22222222-3333-4444-5555-666666666666','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'invitee_c@example.com', 'agent', 'expired_token_hash', '11111111-1111-1111-1111-111111111111', NOW() - INTERVAL '1 day');
+INSERT INTO public.organization_invitations (id, organization_id, email, role, token_hash, invited_by, created_at, expires_at) 
+VALUES ('22222222-3333-4444-5555-666666666666','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'expired_invitee@example.com', 'agent', encode(sha256(convert_to('expired_token_raw', 'UTF8')), 'hex'), '11111111-1111-1111-1111-111111111111', NOW() - INTERVAL '2 days', NOW() - INTERVAL '1 day');
 
-SELECT set_config('request.jwt.claims', '{"sub":"77777777-7777-7777-7777-777777777777","role":"authenticated"}', true);
+SELECT set_config('request.jwt.claims', '{"sub":"88888888-8888-8888-8888-888888888888","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 
 SELECT throws_ok(
-  $$SELECT private.accept_invitation('expired_token_hash', '77777777-7777-7777-7777-777777777777'::uuid)$$,
-  'P0001',
-  'Invitation token has expired',
+  $$SELECT public.accept_invitation('expired_token_raw')$$,
+  'P3D05',
+  NULL,
   'Test 30: Expired invitation is rejected'
 );
 
 -- =============================================================================
--- TEST 31: private.accept_invitation validation: email identity mismatch
+-- TEST 31: accept_invitation validation: email identity mismatch
 -- =============================================================================
 SET LOCAL ROLE postgres;
-INSERT INTO public.organization_invitations (id, organization_id, email, role, token_hash, invited_by, expires_at) 
-VALUES ('33333333-4444-5555-6666-777777777777','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'mismatched_invitee@example.com', 'agent', 'mismatch_token_hash', '11111111-1111-1111-1111-111111111111', NOW() + INTERVAL '1 day');
+INSERT INTO public.organization_invitations (id, organization_id, email, role, token_hash, invited_by, created_at, expires_at) 
+VALUES ('33333333-4444-5555-6666-777777777777','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'mismatched_invitee@example.com', 'agent', encode(sha256(convert_to('mismatch_token_raw', 'UTF8')), 'hex'), '11111111-1111-1111-1111-111111111111', NOW(), NOW() + INTERVAL '1 day');
 
 -- Authenticated user is invitee_c@example.com (77777777-7777-7777-7777-777777777777) but token is bound to mismatched_invitee@example.com
 SELECT set_config('request.jwt.claims', '{"sub":"77777777-7777-7777-7777-777777777777","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 
 SELECT throws_ok(
-  $$SELECT private.accept_invitation('mismatch_token_hash', '77777777-7777-7777-7777-777777777777'::uuid)$$,
-  'P0001',
-  'Invitation email identity mismatch',
+  $$SELECT public.accept_invitation('mismatch_token_raw')$$,
+  'P3D06',
+  NULL,
   'Test 31: Email identity mismatch prevents invitation acceptance'
 );
 
 -- =============================================================================
--- TEST 32: private.accept_invitation validation: double-acceptance protection
+-- TEST 32: accept_invitation validation: double-acceptance protection
 -- =============================================================================
 -- First acceptance succeeds
 SELECT set_config('request.jwt.claims', '{"sub":"77777777-7777-7777-7777-777777777777","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 
 SELECT lives_ok(
-  $$SELECT private.accept_invitation('test_token_hash_123', '77777777-7777-7777-7777-777777777777'::uuid)$$,
+  $$SELECT public.accept_invitation('test_token_raw_123')$$,
   'Test 32a: Normal invitation acceptance succeeds'
 );
 
 -- Replay acceptance fails (no longer pending)
 SELECT throws_ok(
-  $$SELECT private.accept_invitation('test_token_hash_123', '77777777-7777-7777-7777-777777777777'::uuid)$$,
-  'P0001',
-  'Invitation is no longer pending',
+  $$SELECT public.accept_invitation('test_token_raw_123')$$,
+  'P3D04',
+  NULL,
   'Test 32b: Replaying used invitation is rejected (double-acceptance protection)'
 );
 
