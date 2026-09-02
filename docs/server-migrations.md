@@ -225,7 +225,7 @@ Those are not reproduced here; do not read extra lines as a problem.
 <!-- schema-gate-sample:start -->
 
 ```
-  [ok]   all 44 migration(s) in this checkout are applied (database has 44, latest 20260902000002)
+  [ok]   all 45 migration(s) in this checkout are applied (database has 45, latest 20260903000001)
   [ok]   20260819000001: failed_jobs.provider_error_detail column — column is selectable
   [ok]   20260819000001: archive_draft_failed_job 4-argument overload (extended error-code allowlist) — signature present, returned P3B07 DRAFT_JOB_NOT_FOUND
   [ok]   database schema matches this checkout
@@ -243,7 +243,8 @@ lifecycle) landed, 39 / `20260826000001` until `20260830000001` (the
 organization locale column) landed, 40 / `20260830000001` until
 `20260830000002` (the Spanish AI seed defaults), 41 / `20260830000002` until
 `20260901000001` (the conversation activity-ordering column), and 42 /
-`20260901000001` until `20260902000002` (the contact entity). No
+`20260901000001` until `20260902000002` (the contact entity), and 43 /
+`20260902000002` until `20260903000001` (plans and entitlements). No
 correction has ever been noticed by a human reading the document; every one of
 them was this test failing a build.
 
