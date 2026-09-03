@@ -8,3 +8,4 @@
 // call sites is a trap for whoever imports it next believing it is the
 // enforcement point.
 export * from './whatsapp-signature';
+export * from './secret-crypto';

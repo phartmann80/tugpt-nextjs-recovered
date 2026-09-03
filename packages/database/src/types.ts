@@ -308,6 +308,77 @@ export interface ConversationEvent {
 }
 
 /**
+ * A credential, encrypted by the application.
+ *
+ * The database holds ciphertext and no key — see migration 20260903000003 for
+ * why the pgcrypto-in-database alternatives were rejected. Nothing in the app
+ * reads these rows directly; `@tugpt/security`'s `decryptSecret` does, and
+ * only `service_role` can reach them.
+ */
+interface EncryptedSecretColumns {
+  /** Always `'aes-256-gcm'` today. Present so old rows say what encrypted them. */
+  algorithm: 'aes-256-gcm';
+  /**
+   * Which key encrypted this row. The single most important column here:
+   * rotation means finding the rows still on the retired key, and a store that
+   * cannot answer that can never retire one.
+   */
+  key_id: string;
+  /** 12 bytes. A fresh random nonce per encryption; reuse under one key is fatal. */
+  iv: string;
+  ciphertext: string;
+  /** 16 bytes. The full GCM tag — truncating it weakens forgery resistance. */
+  auth_tag: string;
+}
+
+/** TuGPT's own vendor credentials. Belongs to no organization. */
+export interface PlatformSecret extends EncryptedSecretColumns {
+  id: string;
+  provider: string;
+  secret_name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * A customer's connected account.
+ *
+ * A separate table from {@link PlatformSecret} rather than one table with a
+ * nullable `organization_id`: the usual RLS predicate evaluates to NULL for
+ * platform rows and excludes them by accident rather than by intent, and
+ * security that works by accident works until someone writes the policy the
+ * other way round.
+ */
+export interface OrganizationSecret extends EncryptedSecretColumns {
+  id: string;
+  organization_id: string;
+  provider: string;
+  secret_name: string;
+  /** ADR-015 D8. Empty array, never null — "none" and "unknown" differ. */
+  scopes: string[];
+  /** `null` for credentials that do not expire, such as API keys. */
+  expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * One row of `public.organization_connected_accounts(organization_id)`.
+ *
+ * Metadata only. Deliberately carries no `ciphertext`, `iv`, `auth_tag` or
+ * `key_id` — the last of those would tell a caller which key to go after.
+ */
+export interface ConnectedAccount {
+  provider: string;
+  secret_name: string;
+  scopes: string[];
+  expires_at: string | null;
+  is_expired: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
  * An effective-dated provider rate.
  *
  * Prices live in a table rather than configuration because the rate is copied
@@ -638,6 +709,18 @@ export interface Database {
         Insert: never;
         Update: never;
       };
+      platform_secrets: {
+        Row: PlatformSecret;
+        Insert: Omit<PlatformSecret, 'id' | 'created_at' | 'updated_at'>
+          & { id?: string; algorithm?: 'aes-256-gcm'; created_at?: string; updated_at?: string };
+        Update: Partial<PlatformSecret>;
+      };
+      organization_secrets: {
+        Row: OrganizationSecret;
+        Insert: Omit<OrganizationSecret, 'id' | 'created_at' | 'updated_at'>
+          & { id?: string; algorithm?: 'aes-256-gcm'; scopes?: string[]; created_at?: string; updated_at?: string };
+        Update: Partial<OrganizationSecret>;
+      };
       provider_prices: {
         Row: ProviderPrice;
         Insert: Omit<ProviderPrice, 'id' | 'created_at' | 'updated_at'>
@@ -749,6 +832,10 @@ export interface Database {
       [_ in never]: never;
     };
     Functions: {
+      organization_connected_accounts: {
+        Args: { p_organization_id: string };
+        Returns: ConnectedAccount[];
+      };
       record_provider_usage: {
         Args: {
           p_organization_id: string;
