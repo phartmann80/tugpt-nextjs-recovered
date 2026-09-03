@@ -18,6 +18,11 @@
  *     used on other projects and cross-project coupling/usage bleed must be
  *     avoided. Reversing that requires a separate, explicit decision.
  *
+ * SPEECH-TO-TEXT is a separate capability with its own contract, not a wider
+ * `AIProviderAdapter` — see `transcription.ts` and ADR-006. `gladia` is the
+ * only implementation and it is inert until the per-org `voice_transcription`
+ * flag is on (migration 20260903000004), which ships false everywhere.
+ *
  * The legacy `AIProviderFactory` singleton (`factory.ts`) was deleted on
  * 2026-08-18: it was unreferenced dead code, and it was the last remaining
  * reader of the `MODEL` environment variable. Model selection now lives in
@@ -27,8 +32,10 @@
 export * from './adapter';
 export * from './anymize';
 export * from './errors';
+export * from './gladia';
 export * from './langdock';
 export * from './langdock-rotation';
 export * from './logicc';
 export * from './mastra';
 export * from './openai';
+export * from './transcription';

@@ -225,7 +225,7 @@ Those are not reproduced here; do not read extra lines as a problem.
 <!-- schema-gate-sample:start -->
 
 ```
-  [ok]   all 48 migration(s) in this checkout are applied (database has 48, latest 20260903000003)
+  [ok]   all 49 migration(s) in this checkout are applied (database has 49, latest 20260903000004)
   [ok]   20260819000001: failed_jobs.provider_error_detail column — column is selectable
   [ok]   20260819000001: archive_draft_failed_job 4-argument overload (extended error-code allowlist) — signature present, returned P3B07 DRAFT_JOB_NOT_FOUND
   [ok]   database schema matches this checkout
@@ -246,7 +246,8 @@ organization locale column) landed, 40 / `20260830000001` until
 `20260901000001` until the four September-2 branches merged together and took
 it to 46 / `20260903000001`, 46 / `20260903000001` until `20260903000002`
 (provider usage and cost), and 47 / `20260903000002` until `20260903000003`
-(secret storage). No correction has ever been noticed by a human
+(secret storage), and 48 / `20260903000003` until `20260903000004` (the
+voice-transcription flag and the Gladia rate). No correction has ever been noticed by a human
 reading the document; every one of them was this test failing a build.
 
 A note on that four-branch step, because the list above was briefly wrong in a
