@@ -72,23 +72,25 @@ SELECT col_is_null('public', 'provider_usage_events', 'cost_micros',
 
 SELECT is(
   (SELECT count(*)::int FROM public.provider_prices
-    WHERE provider NOT IN ('testprov', 'gladia')),
+    WHERE provider NOT IN ('testprov', 'gladia', 'langdock')),
   0,
-  'S5: gladia is the only real rate the migrations seed — a wrong price makes '
-  'cost plausibly wrong, where a missing one makes it visibly unknown, so '
-  'every addition here should be a deliberate act with a failing test'
+  'S5: gladia and langdock are the only real rates the migrations seed — a '
+  'wrong price makes cost plausibly wrong, where a missing one makes it '
+  'visibly unknown, so every addition here is a deliberate act with a '
+  'failing test. This assertion has now caught two such additions'
 );
 
--- Langdock in particular has NO seeded price, and that is the current state of
--- knowledge rather than an oversight: its per-model rates are not confirmed,
--- and neither is its billing currency (it is a German vendor and the currency
--- column is CHECKed to USD). Until both are answered, Langdock calls record as
--- priced-unknown, which is visible, instead of as a plausible wrong number.
+-- Langdock's rates arrived on 2026-09-03 (20260903000005), and with them the
+-- second currency. This used to assert that Langdock had NO price, pending
+-- confirmation of its per-model rates and its billing currency; both were
+-- answered, so the guard becomes a coverage assertion instead of a not-yet
+-- one. A model on LANGDOCK_ALLOWED_MODELS with no row here would bill as
+-- priced-unknown forever, which is the failure worth pinning.
 SELECT is(
-  (SELECT count(*)::int FROM public.provider_prices WHERE provider = 'langdock'),
-  0,
-  'S6: langdock has no seeded rate, pending its confirmed per-model prices '
-  'and billing currency'
+  (SELECT count(*)::int FROM public.provider_prices
+    WHERE provider = 'langdock' AND effective_to IS NULL),
+  8,
+  'S6: langdock prices all four allowlisted models on both token dimensions'
 );
 
 -- --- R: price resolution ----------------------------------------------------
@@ -280,8 +282,13 @@ SELECT is(
 
 SET CONSTRAINTS ALL IMMEDIATE;
 
+-- Sets `currency` as well as `cost_micros`, because 20260903000005 added a
+-- CHECK that the two are NULL together. Without the currency this UPDATE is
+-- refused by that CHECK (23514) before the trigger ever runs — which would
+-- still be a refusal, but of a different thing, and would quietly stop this
+-- assertion from covering the trigger it was written for.
 SELECT throws_ok(
-  $$UPDATE public.provider_usage_events SET cost_micros = 0
+  $$UPDATE public.provider_usage_events SET cost_micros = 0, currency = 'USD'
      WHERE request_id = 'req-unpriced'$$,
   'P3G01',
   NULL,
