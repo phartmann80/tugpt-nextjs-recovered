@@ -28,7 +28,7 @@
 -- past the threshold must still convert and the meter must still answer.
 
 BEGIN;
-SELECT plan(23);
+SELECT plan(28);
 
 -- --- Fixtures --------------------------------------------------------------
 
@@ -322,6 +322,43 @@ SELECT ok(
      FROM public.provider_usage_events WHERE request_id = 'req-fx-stale'),
   'S4: spend 200 days past the rate still converts, at the stale rate, rather '
   'than being refused'
+);
+
+-- ===========================================================================
+-- W: the deploy gate can read it
+-- ===========================================================================
+
+-- 20260903000007. Without a reader, "warn but do not block" is just "do not
+-- block", so the preflight gate calls this on every deploy.
+SELECT is(
+  (SELECT count(*)::int FROM public.fx_rate_status()),
+  (SELECT count(*)::int FROM private.fx_rate_status()),
+  'W1: the public wrapper returns what the private function returns'
+);
+
+SELECT ok(
+  (SELECT is_stale FROM public.fx_rate_status()
+    WHERE base_currency = 'USD' AND quote_currency = 'EUR'),
+  'W2: including the staleness flag the gate keys off — one threshold, not a '
+  'copy of 45 maintained in TypeScript as well'
+);
+
+-- Operational surface is not granted to customers by default. Nothing here is
+-- customer data; the rule is that an exception should be argued for.
+SELECT ok(
+  NOT has_function_privilege('authenticated', 'public.fx_rate_status()', 'EXECUTE'),
+  'W3: authenticated cannot execute it'
+);
+
+SELECT ok(
+  NOT has_function_privilege('anon', 'public.fx_rate_status()', 'EXECUTE'),
+  'W4: nor anon'
+);
+
+SELECT ok(
+  has_function_privilege('service_role', 'public.fx_rate_status()', 'EXECUTE'),
+  'W5: service_role can — the positive control, without which W3 and W4 would '
+  'pass against a function nobody can call at all'
 );
 
 SELECT * FROM finish();
