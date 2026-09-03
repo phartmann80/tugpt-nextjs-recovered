@@ -33,6 +33,20 @@ export const MOCK_DRAFT_CONFIG = {
 };
 
 export const MOCK_DRAFT_TEXT = 'Hello! Thank you for reaching out. How can I help you today?';
+/** The provider's own id for the call — what a recorded cost reconciles against. */
+export const MOCK_PROVIDER_REFERENCE = 'prov-call-abc123';
+
+/**
+ * Deliberately asymmetric: 1200 in, 340 out. Equal numbers would let an
+ * input/output swap in the usage-recording path pass unnoticed, and the two
+ * are priced at different rates.
+ */
+export const MOCK_USAGE = {
+  promptTokens: 1200,
+  completionTokens: 340,
+  totalTokens: 1540,
+};
+
 export const MOCK_PROVIDER = 'langdock';
 export const MOCK_MODEL = 'auto';
 
@@ -136,6 +150,8 @@ export function createMockOrchestrator(
               provider: MOCK_PROVIDER,
               model: MOCK_MODEL,
               latencyMs: 150,
+              providerReference: MOCK_PROVIDER_REFERENCE,
+              usage: MOCK_USAGE,
             },
           };
         case 'fail-transient':

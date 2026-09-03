@@ -207,6 +207,8 @@ export class DraftOrchestrator {
       provider: response.provider,
       model: response.model,
       latencyMs: response.latencyMs,
+      providerReference: response.id,
+      usage: response.usage,
     };
 
     return { success: true, result };

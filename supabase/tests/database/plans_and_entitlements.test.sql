@@ -57,10 +57,14 @@ VALUES
 
 -- --- V: the metric vocabulary ----------------------------------------------
 
+-- The SET, not a count. A count of four says nothing about which four, and
+-- the failure it produces ("expected 3, got 4") tells the next person only
+-- that a number moved. This names them, so adding one is a deliberate edit
+-- here and removing one is loud.
 SELECT is(
-  (SELECT count(*)::int FROM public.entitlement_metrics),
-  3,
-  'V1: three metrics are seeded — the ones with a counter today, and no others'
+  (SELECT string_agg(key, ',' ORDER BY key) FROM public.entitlement_metrics),
+  'ai_cost_micros,ai_drafts,seats,whatsapp_numbers',
+  'V1: exactly the metrics that have a counting branch today, and no others'
 );
 
 SELECT throws_ok(
@@ -494,14 +498,23 @@ SELECT ok(
   'is what makes it the safe one to expose'
 );
 
+SELECT set_config('tugpt.test_metric_count',
+  (SELECT count(*)::text FROM public.entitlement_metrics), true);
+
 SELECT set_config('request.jwt.claims',
   '{"sub":"11111111-e400-0000-0000-000000000001","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 
+-- Derived rather than hardcoded, so adding a metric does not need this line
+-- edited to stay true. It is stashed in a session setting rather than read
+-- inline, because by this point the role is `authenticated` and that role
+-- genuinely cannot read entitlement_metrics — which is what P1/P2 assert two
+-- screens up. A plain subquery here fails with "permission denied", and the
+-- suite would be reporting an access-control success as a test failure.
 SELECT is(
   (SELECT count(*)::int FROM public.organization_entitlements(
      'aaaaaaaa-e400-0000-0000-000000000001')),
-  3,
+  current_setting('tugpt.test_metric_count')::int,
   'P6: a member gets one row per metric'
 );
 

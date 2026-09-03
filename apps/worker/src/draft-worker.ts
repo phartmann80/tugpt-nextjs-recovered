@@ -17,7 +17,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { Logger } from '@tugpt/observability';
 import { DraftPgmqAdapter } from './draft-queue-adapter.js';
 import { DraftOrchestrator } from '@tugpt/ai-orchestration';
-import type { DraftRequest, DraftConfig } from '@tugpt/ai-orchestration';
+import type { DraftRequest, DraftConfig, DraftResult } from '@tugpt/ai-orchestration';
 import { DEFAULT_ORGANIZATION_LOCALE, normalizeOrganizationLocale } from '@tugpt/database';
 import type { ProviderErrorCategory } from '@tugpt/ai-providers';
 import {
@@ -281,7 +281,21 @@ export class DraftWorker {
           result.result.model
         );
 
-        // Step 8: Delete queue message
+        // Step 8: Record what the call consumed and what it cost.
+        //
+        // After storeDraft, not before: the draft is the customer-visible work
+        // and must not be undone by a bookkeeping failure. That ordering is
+        // also why recordUsage swallows its own errors — see the comment there
+        // for the trade and its named successor.
+        await this.recordUsage(
+          jobRow.organization_id,
+          draftGenerationJobId,
+          jobRow.source_message_id,
+          requestId,
+          result.result
+        );
+
+        // Step 9: Delete queue message
         await this.queue.deleteJob(msgId);
 
         logger.info('Draft generated successfully', {
@@ -475,6 +489,74 @@ export class DraftWorker {
 
     const result = data as { status: string; reason: string | null };
     return { status: result.status, reason: result.reason };
+  }
+
+  /**
+   * Records one provider call against the organization's cost meter.
+   *
+   * Deliberately does not throw. By the time this runs the draft is stored and
+   * the provider has already charged for the call; failing the job here would
+   * retry a draft that already exists, which is a worse outcome than a missing
+   * accounting row. So a failure is logged at error level WITH THE QUANTITIES,
+   * so the number is recoverable from the logs rather than simply gone.
+   *
+   * The honest limitation: this is a second transaction, so a crash between
+   * storeDraft and here loses the usage. Making it atomic means folding the
+   * usage arguments into the store RPC — a real option, deliberately not taken
+   * in this change because it couples two things that are otherwise
+   * independent, and the loss window is one RPC wide.
+   */
+  private async recordUsage(
+    organizationId: string,
+    draftGenerationJobId: string,
+    sourceMessageId: string,
+    requestId: string | undefined,
+    result: DraftResult
+  ): Promise<void> {
+    // Inside the try, not above it. Reading result.usage is itself a place this
+    // can throw — a provider returning a response without a usage block would
+    // otherwise take down a draft job that had already succeeded, which is the
+    // exact outcome this method exists to avoid. Found by the lifecycle test,
+    // whose fixture had no usage block.
+    try {
+      const quantities = {
+        input_tokens: result.usage.promptTokens,
+        output_tokens: result.usage.completionTokens,
+      };
+
+      const { error } = await this.client.rpc('record_provider_usage', {
+        p_organization_id: organizationId,
+        p_modality: 'text',
+        p_provider: result.provider,
+        p_model: result.model,
+        p_quantities: quantities,
+        p_provider_reference: result.providerReference,
+        p_request_id: requestId ?? draftGenerationJobId,
+        p_draft_generation_job_id: draftGenerationJobId,
+        p_message_id: sourceMessageId,
+        p_metadata: { latency_ms: result.latencyMs },
+      });
+
+      if (error) {
+        throw new Error(error.message);
+      }
+    } catch (err) {
+      logger.error(
+        'Failed to record provider usage; the draft is unaffected',
+        err instanceof Error ? err : new Error(String(err)),
+        {
+          draftGenerationJobId,
+          requestId,
+          provider: result.provider,
+          model: result.model,
+          // The quantities are logged so the cost is reconstructible by hand.
+          // A row we could not write is recoverable; a number we never printed
+          // is not.
+          promptTokens: result.usage.promptTokens,
+          completionTokens: result.usage.completionTokens,
+        }
+      );
+    }
   }
 
   private async storeDraft(

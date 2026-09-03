@@ -308,6 +308,97 @@ export interface ConversationEvent {
 }
 
 /**
+ * An effective-dated provider rate.
+ *
+ * Prices live in a table rather than configuration because the rate is copied
+ * onto the usage row at write time — history stays immutable, but the *current*
+ * rate still has to come from somewhere auditable. A rate in an environment
+ * variable is a number nobody reviewed and nobody can diff.
+ */
+export interface ProviderPrice {
+  id: string;
+  provider: string;
+  /** `null` means "any model from this provider". An exact match outranks it. */
+  model: string | null;
+  dimension: 'input_tokens' | 'output_tokens' | 'audio_seconds';
+  /** Price for one unit, as a decimal string — `NUMERIC(20,10)` in the database. */
+  unit_price: string;
+  currency: 'USD';
+  effective_from: string;
+  /** `null` means still in effect. */
+  effective_to: string | null;
+  /** Where the number came from. A price with no provenance cannot be re-verified. */
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * One provider call: what it was, and what it cost.
+ *
+ * @see ProviderUsageComponent for the per-dimension breakdown. An event's
+ * `cost_micros` is required to equal the sum of its components', enforced by a
+ * deferred constraint trigger — a total nobody can reconstruct cannot be
+ * defended in a billing dispute.
+ */
+export interface ProviderUsageEvent {
+  id: string;
+  organization_id: string;
+  occurred_at: string;
+  modality: 'text' | 'audio';
+  /** As *reported* by the adapter. Under rotation this is not the model asked for. */
+  provider: string;
+  model: string | null;
+  /** The provider's own id for the call — what an invoice line reconciles against. */
+  provider_reference: string | null;
+  request_id: string | null;
+  draft_generation_job_id: string | null;
+  message_id: string | null;
+  currency: 'USD';
+  /**
+   * Micro-units of currency, and **nullable**.
+   *
+   * Micro rather than cents because a 15-second voice note costs ~2,542 µUSD,
+   * which cents would round to zero. Nullable because a call with no price in
+   * the book is recorded with an unknown cost rather than dropped or valued at
+   * zero — the provider will charge for it either way, so losing the row
+   * destroys the only evidence it happened, and a zero silently under-reports
+   * the organization's spend to the entitlement meter.
+   */
+  cost_micros: number | null;
+  /**
+   * Small, and never customer content. For audio this carries `audio_duration`
+   * beside a billed `audio_seconds` component, so the difference between what
+   * was measured and what was billed stays visible.
+   */
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+/**
+ * One billed dimension of a {@link ProviderUsageEvent}.
+ *
+ * A separate table rather than columns on the event, because a text call bills
+ * input and output at *different* rates and one row cannot carry one price.
+ */
+export interface ProviderUsageComponent {
+  id: string;
+  event_id: string;
+  dimension: 'input_tokens' | 'output_tokens' | 'audio_seconds';
+  quantity: number;
+  /**
+   * The rate at the time of the call, copied onto the row. Joining to
+   * {@link ProviderPrice} instead would re-price history every time a vendor
+   * changed rates, and last month's invoice would stop reconciling.
+   *
+   * `null` together with `cost_micros` when no price was known.
+   */
+  unit_price: string | null;
+  cost_micros: number | null;
+  created_at: string;
+}
+
+/**
  * A thing the platform can meter.
  *
  * `kind` matters: a `limit` is about what exists right now and can go down when
@@ -547,6 +638,24 @@ export interface Database {
         Insert: never;
         Update: never;
       };
+      provider_prices: {
+        Row: ProviderPrice;
+        Insert: Omit<ProviderPrice, 'id' | 'created_at' | 'updated_at'>
+          & { id?: string; currency?: 'USD'; effective_from?: string; created_at?: string; updated_at?: string };
+        Update: Partial<ProviderPrice>;
+      };
+      provider_usage_events: {
+        Row: ProviderUsageEvent;
+        Insert: Omit<ProviderUsageEvent, 'id' | 'created_at'>
+          & { id?: string; occurred_at?: string; currency?: 'USD'; metadata?: Record<string, unknown>; created_at?: string };
+        Update: Partial<ProviderUsageEvent>;
+      };
+      provider_usage_components: {
+        Row: ProviderUsageComponent;
+        Insert: Omit<ProviderUsageComponent, 'id' | 'created_at'>
+          & { id?: string; created_at?: string };
+        Update: Partial<ProviderUsageComponent>;
+      };
       entitlement_metrics: {
         Row: EntitlementMetric;
         Insert: Omit<EntitlementMetric, 'created_at'> & { created_at?: string };
@@ -640,6 +749,24 @@ export interface Database {
       [_ in never]: never;
     };
     Functions: {
+      record_provider_usage: {
+        Args: {
+          p_organization_id: string;
+          p_modality: 'text' | 'audio';
+          p_provider: string;
+          p_model: string | null;
+          /** e.g. `{ input_tokens: 1200, output_tokens: 340 }` or `{ audio_seconds: 137 }`. */
+          p_quantities: Record<string, number>;
+          p_provider_reference?: string | null;
+          p_request_id?: string | null;
+          p_draft_generation_job_id?: string | null;
+          p_message_id?: string | null;
+          p_metadata?: Record<string, unknown>;
+          p_occurred_at?: string;
+        };
+        /** The new event's id. */
+        Returns: string;
+      };
       organization_entitlements: {
         Args: {
           p_organization_id: string;

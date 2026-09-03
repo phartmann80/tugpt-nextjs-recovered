@@ -54,6 +54,27 @@ export interface DraftResult {
   readonly provider: string;
   readonly model: string;
   readonly latencyMs: number;
+  /**
+   * The provider's own identifier for the call.
+   *
+   * Carried so a recorded cost can be matched back to an invoice line. Without
+   * it, a disputed charge has nothing on our side to reconcile against.
+   */
+  readonly providerReference: string;
+  /**
+   * Tokens consumed, straight from the provider's response.
+   *
+   * Every adapter has computed this since the contract was written
+   * (`adapter.ts:41-45`); until migration 20260903000002 nothing persisted it,
+   * so it was measured on every draft and discarded. It is on `DraftResult`
+   * rather than logged in the orchestrator because the worker is what knows
+   * the organization the cost belongs to.
+   */
+  readonly usage: {
+    readonly promptTokens: number;
+    readonly completionTokens: number;
+    readonly totalTokens: number;
+  };
 }
 
 /** Orchestrator return type: success or structured error. */
