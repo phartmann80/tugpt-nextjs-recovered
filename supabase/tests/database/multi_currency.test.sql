@@ -19,12 +19,13 @@
 -- ONE EVENT, ONE CURRENCY (M1). An event's components are summed into its
 -- total, so they must share a currency for that total to mean anything.
 --
--- THE METER REFUSES RATHER THAN UNDER-REPORTS (T1-T4). Skipping foreign-
--- currency rows returns a number that is too small, which for an enforcement
--- meter means letting an organization past a cap it has already exceeded — and
--- it looks like it works, which is what makes it worse than raising. T3 is the
--- one that matters: a period holding both currencies must not quietly report
--- the USD half.
+-- THE METER COUNTS BOTH CURRENCIES (T1-T5). Until 20260903000006 this block
+-- asserted that any foreign-currency spend RAISED, because none of it could be
+-- expressed in the accounting currency. FX conversion arrived on 2026-09-03
+-- and the bar moved: convertible spend is converted and counted, and only
+-- priced spend with no available rate still refuses. That refusal now lives in
+-- `fx_conversion.test.sql`, which owns the conversion story; what stays here
+-- is that two currencies in one period produce one honest total.
 --
 -- THE RATES ARE THE RATES (P1-P5). P2 asserts the per-1M figures a human
 -- actually read off the vendor's page, recovered from what is stored, rather
@@ -186,25 +187,29 @@ SELECT is(
   'T1: an organization spending only in the accounting currency meters normally'
 );
 
--- The organization from block C holds both EUR and USD spend in this period.
--- Returning the USD half would be an under-report, and an under-report on an
--- enforcement meter lets an organization past a cap it has already exceeded.
-SELECT throws_ok(
-  $$SELECT private.current_entitlement_usage(
-      'aaaaaaaa-c123-0000-0000-000000000001', 'ai_cost_micros')$$,
-  'P3G05',
-  NULL,
-  'T2: a period holding spend in another currency raises rather than '
-  'silently reporting only the convertible part'
+-- The organization from block C holds both EUR and USD spend in this period:
+--   req-eur-1     833 µEUR  -> 964 µUSD at 1.1578
+--   req-usd-1   10167 µUSD  -> 10167, no conversion
+--   req-mixed-2   100 µEUR  -> 116 µUSD
+--   req-unpriced-1 unpriced -> excluded, and does not raise
+-- The euros are converted rather than dropped, and the dollars are not
+-- converted twice.
+SELECT is(
+  private.current_entitlement_usage(
+    'aaaaaaaa-c123-0000-0000-000000000001', 'ai_cost_micros'),
+  11247,
+  'T2: a period holding both currencies meters as one total in the accounting '
+  'currency — 964 + 10167 + 116'
 );
 
--- The failure names the missing input, not the symptom: a reader gets "no
--- conversion is configured", not "unexpected currency".
-SELECT throws_like(
-  $$SELECT private.current_entitlement_usage(
-      'aaaaaaaa-c123-0000-0000-000000000001', 'ai_cost_micros')$$,
-  '%no conversion is configured%',
-  'T3: and says what is missing rather than what went wrong'
+-- The USD half alone would be 10283. Asserting that the answer is NOT that is
+-- the difference between "it converted" and "it skipped the euros and nobody
+-- noticed", which is the failure this whole design is arranged against.
+SELECT isnt(
+  private.current_entitlement_usage(
+    'aaaaaaaa-c123-0000-0000-000000000001', 'ai_cost_micros'),
+  10283,
+  'T3: and is not merely the accounting-currency half — the euros are in there'
 );
 
 -- Window-scoped, not global: EUR spend outside the period being metered must
