@@ -2,7 +2,7 @@
 
 **Status:** active
 **Gate:** CI job `database-tests` in `.github/workflows/ci.yml`
-**Files:** <!-- database-tests-count:start -->`supabase/tests/database/*.sql` — 28 files<!-- database-tests-count:end -->, ~600 pgTAP assertions
+**Files:** <!-- database-tests-count:start -->`supabase/tests/database/*.sql` — 29 files<!-- database-tests-count:end -->, ~655 pgTAP assertions
 
 ## Why this document exists
 
@@ -67,6 +67,7 @@ container — use it after adding a migration rather than restarting.
 | `contact_entity.test.sql` | `public.contacts` — that a contact is `(organization_id, phone)` and NOT scoped to a WhatsApp number (one human on a business's two numbers is one contact), that `contacts.phone` is immutable and `conversations.contact_id` is derived and refuses to disagree with `contact_phone`, and that the backfill collapses pre-migration rows the same way |
 | `plans_and_entitlements.test.sql` | ADR-015 D5's entitlement layer — that resolution FAILS CLOSED for an organization with no subscription, that override beats plan and an expired override does not, that `past_due` still resolves while `canceled` does not, that unlimited (`granted` with a NULL allowance) stays distinguishable from denied, and that every declared metric has a counting branch |
 | `conversation_assignment_and_handoff.test.sql` | that `needs_human` actually stops AI drafting — proved end to end through `process_inbound_message` with positive controls in both directions, since a status column that no code reads would look identical — plus assignment compare-and-set, the `conversation_events` record of who switched it, and that erasing a reviewer releases their conversations instead of blocking the delete |
+| `provider_usage_and_cost.test.sql` | token and cost accounting — that an event's cost equals the sum of its components (tampering with either side is refused), that an unpriced call is recorded with a NULL cost rather than dropped or valued at zero, that a later price change does not re-price history, and that audio bills on the provider's `billing_time` (duration x channels) rather than on the duration we measured |
 
 ## Writing a test
 

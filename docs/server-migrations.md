@@ -225,7 +225,7 @@ Those are not reproduced here; do not read extra lines as a problem.
 <!-- schema-gate-sample:start -->
 
 ```
-  [ok]   all 46 migration(s) in this checkout are applied (database has 46, latest 20260903000001)
+  [ok]   all 47 migration(s) in this checkout are applied (database has 47, latest 20260903000002)
   [ok]   20260819000001: failed_jobs.provider_error_detail column — column is selectable
   [ok]   20260819000001: archive_draft_failed_job 4-argument overload (extended error-code allowlist) — signature present, returned P3B07 DRAFT_JOB_NOT_FOUND
   [ok]   database schema matches this checkout
@@ -243,10 +243,20 @@ lifecycle) landed, 39 / `20260826000001` until `20260830000001` (the
 organization locale column) landed, 40 / `20260830000001` until
 `20260830000002` (the Spanish AI seed defaults), 41 / `20260830000002` until
 `20260901000001` (the conversation activity-ordering column), and 42 /
-`20260901000001` until `20260902000002` (the contact entity), and 43 /
-`20260902000002` until `20260903000001` (plans and entitlements). No
-correction has ever been noticed by a human reading the document; every one of
-them was this test failing a build.
+`20260901000001` until the four September-2 branches merged together and took
+it to 46 / `20260903000001`, and 46 / `20260903000001` until `20260903000002`
+(provider usage and cost). No correction has ever been noticed by a human
+reading the document; every one of them was this test failing a build.
+
+A note on that four-branch step, because the list above was briefly wrong in a
+way worth recording. Each of those branches appended its own increment to this
+history from its own base, so the merge concatenated four sequences that each
+skipped the other three: the prose read "43 / `20260902000002`" while the
+sample block above it correctly read 46. The guard test checks the block and
+not the prose, so nothing failed. **A hand-maintained narrative beside a
+machine-checked value will drift, and only the checked half will say so** —
+which is an argument for keeping the narrative short rather than for adding a
+second checker to police it.
 
 A stale database aborts with `REFUSING TO RUN`, followed by:
 
