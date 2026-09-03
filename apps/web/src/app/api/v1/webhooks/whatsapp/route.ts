@@ -142,6 +142,8 @@ export async function POST(request: NextRequest) {
       p_contact_identifier: event.contactIdentifier,
       p_message_kind: event.messageKind,
       p_body_text: event.bodyText,
+      p_media_reference: event.mediaReference,
+      p_media_mime_type: event.mediaMimeType,
       p_provider_timestamp: event.providerTimestamp,
       p_request_id: requestId,
     });

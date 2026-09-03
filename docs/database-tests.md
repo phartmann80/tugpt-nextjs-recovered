@@ -2,7 +2,7 @@
 
 **Status:** active
 **Gate:** CI job `database-tests` in `.github/workflows/ci.yml`
-**Files:** <!-- database-tests-count:start -->`supabase/tests/database/*.sql` — 33 files<!-- database-tests-count:end -->, ~750 pgTAP assertions
+**Files:** <!-- database-tests-count:start -->`supabase/tests/database/*.sql` — 34 files<!-- database-tests-count:end -->, ~750 pgTAP assertions
 
 ## Why this document exists
 
@@ -72,6 +72,7 @@ container — use it after adding a migration rather than restarting.
 | `voice_transcription.test.sql` | the Gladia seeds — that the `voice_transcription` flag ships false and that `is_feature_enabled` ANDs its global and per-org rows in both directions (an organization opting in while the global switch is off stays off; flipping the global switch alone enables nobody), and that the seeded audio rate is USD 0.61 per hour rather than the literal the migration inserted |
 | `multi_currency.test.sql` | two currencies in the price book — that an event's currency is derived from the prices resolved for it rather than taken from a column default (the bug 20260903000005 fixes), that currency is NULL exactly when cost is, that components disagreeing on currency are refused, that the cost meter raises rather than under-reporting when a period holds spend it cannot convert, and that the eight Langdock rates recover to the EUR-per-1M figures they were read from |
 | `fx_conversion.test.sql` | EUR→USD accounting at the ECB reference rate — that the rate in force is the latest one at or before an event's instant (never reached backwards for), that identity needs no row, that the rate and its date are stored per row so a later rate cannot re-price recorded history, that an event already in the accounting currency stores no rate at all, and that a stale rate warns rather than blocking |
+| `transcript_ingest.test.sql` | the path a voice note takes to a draft — that a body can never exist without a `body_source` saying whether a person or a machine produced it (and never a source without a body), that each of the five conditions gating a billable transcription is independently load-bearing against a positive control run on the same fixture, that one message can hold only one transcription job, that completing one writes the transcript, closes the job and enqueues the draft in a single call, that an empty transcript still completes and still bills but writes no body and enqueues nothing, and that a failed or dead-lettered job never puts provider diagnostics in front of a reviewer |
 
 ## Writing a test
 
