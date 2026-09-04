@@ -282,11 +282,23 @@ SELECT is(
 
 -- The figures a human read off the vendor's page, recovered from storage.
 -- Asserting the stored literal back would only prove that copy-paste works.
+--
+-- ORDER BY ... COLLATE "C", and not by accident. Under C the sort is by byte,
+-- so '-' (0x2D) precedes '.' (0x2E) and 'gpt-5-mini' comes before 'gpt-5.1'.
+-- Under a linguistic collation — glibc en_US.UTF-8, which is what a real
+-- Supabase database uses — punctuation is ignored at the primary level, the
+-- keys compare as 'gpt51' against 'gpt5mini', and 'gpt-5.1' comes FIRST.
+--
+-- Written without the COLLATE this assertion passed on a C-collated local
+-- database and failed in CI for three pull requests, with identical values in
+-- a different order. The subject here is whether each rate survives storage,
+-- not how model names sort, so the ordering is pinned to something that cannot
+-- vary with the server's locale rather than being matched to one of them.
 SELECT is(
   (SELECT string_agg(
      model || ':' || replace(dimension, '_tokens', '') || '=' ||
      to_char(round(unit_price * 1000000, 2), 'FM990.00'),
-     ' ' ORDER BY model, dimension)
+     ' ' ORDER BY model COLLATE "C", dimension COLLATE "C")
    FROM public.provider_prices WHERE provider = 'langdock'),
   'gpt-5:input=1.07 gpt-5:output=8.57 '
   'gpt-5-mini:input=0.21 gpt-5-mini:output=1.71 '
