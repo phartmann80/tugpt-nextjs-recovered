@@ -2,7 +2,7 @@
 
 **Status:** active
 **Gate:** CI job `database-tests` in `.github/workflows/ci.yml`
-**Files:** <!-- database-tests-count:start -->`supabase/tests/database/*.sql` — 32 files<!-- database-tests-count:end -->, ~708 pgTAP assertions
+**Files:** <!-- database-tests-count:start -->`supabase/tests/database/*.sql` — 33 files<!-- database-tests-count:end -->, ~720 pgTAP assertions
 
 ## Why this document exists
 
@@ -71,6 +71,7 @@ container — use it after adding a migration rather than restarting.
 | `table_privilege_hygiene.test.sql` | the one privilege rule that row policies cannot enforce — that no table in `public` grants TRUNCATE, TRIGGER or REFERENCES to `anon` or `authenticated`, checked as a query over the catalogue rather than a list of table names so a table added tomorrow is covered; with positive controls that the DML those roles need is still present, that `service_role` was left alone, and — by creating a table inside the test — that a brand-new table arrives holding all three for both roles, which is why the guard exists rather than a one-time revoke |
 | `secret_storage.test.sql` | encrypted credential storage — that `authenticated` and `anon` hold *nothing* on either table (not even SELECT, and specifically not TRIGGER or REFERENCES), that the metadata reader returns an exact column set carrying no ciphertext, iv, auth_tag or key_id, that a wrong-length GCM nonce or truncated tag is refused at the write, and that a nonce reused under one key is refused |
 | `voice_transcription.test.sql` | the Gladia seeds — that the `voice_transcription` flag ships false and that `is_feature_enabled` ANDs its global and per-org rows in both directions (an organization opting in while the global switch is off stays off; flipping the global switch alone enables nobody), and that the seeded audio rate is USD 0.61 per hour rather than the literal the migration inserted |
+| `multi_currency.test.sql` | two currencies in the price book — that an event's currency is derived from the prices resolved for it rather than taken from a column default (the bug 20260903000005 fixes), that currency is NULL exactly when cost is, that components disagreeing on currency are refused, that the cost meter raises rather than under-reporting when a period holds spend it cannot convert, and that the eight Langdock rates recover to the EUR-per-1M figures they were read from |
 
 ## Writing a test
 

@@ -20,11 +20,25 @@
   // docker-compose.yml and the worker Dockerfile are here for the same reason:
   // apps/worker/tests/worker-start-command.test.ts reads both, and without
   // this a change to either leaves that suite's cached pass valid.
+  //
+  // supabase/migrations/** joined this list on 2026-09-03 for the same reason
+  // and with the same trade. apps/worker/tests/langdock-price-coverage.test.ts
+  // reads a migration and asserts every allowlisted Langdock model is priced
+  // there; without this entry, editing that migration leaves the suite's
+  // cached pass valid and a deleted price row reports FULL TURBO. CI runs cold
+  // so CI would still catch it, but a local `pnpm test` would not — which is
+  // precisely the failure that put the two documents above here.
+  //
+  // The cost is real and worth naming: this repo adds a migration in most
+  // PRs, so in practice it invalidates the monorepo's cache about once per
+  // change. That is roughly what CI does anyway, and a guard that can report a
+  // false pass is worth less than the cache it saves.
   "globalDependencies": [
     "docs/controlled-rollout.md",
     "docs/server-migrations.md",
     "docker-compose.yml",
-    "apps/worker/Dockerfile"
+    "apps/worker/Dockerfile",
+    "supabase/migrations/**"
   ],
 
   // Every @tugpt/* package now compiles to dist/ and points `main` and
