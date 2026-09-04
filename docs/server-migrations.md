@@ -238,7 +238,7 @@ reference date, and a source naming both.
 <!-- schema-gate-sample:start -->
 
 ```
-  [ok]   all 53 migration(s) in this checkout are applied (database has 53, latest 20260904000001)
+  [ok]   all 54 migration(s) in this checkout are applied (database has 54, latest 20260904000001)
   [ok]   20260819000001: failed_jobs.provider_error_detail column — column is selectable
   [ok]   20260819000001: archive_draft_failed_job 4-argument overload (extended error-code allowlist) — signature present, returned P3B07 DRAFT_JOB_NOT_FOUND
   [ok]   database schema matches this checkout
@@ -263,8 +263,9 @@ it to 46 / `20260903000001`, 46 / `20260903000001` until `20260903000002`
 voice-transcription flag and the Gladia rate), 49 / `20260903000004` until
 `20260903000005` (multi-currency and the Langdock rates), 50 /
 `20260903000005` until `20260903000006` (FX conversion), 51 / `20260903000006`
-until `20260903000007` (the FX status RPC the preflight gate reads), and 52 /
-`20260903000007` until `20260904000001` (revoking TRUNCATE, TRIGGER and
+until `20260903000007` (the FX status RPC the preflight gate reads), 52 /
+`20260903000007` until `20260903000008` (the transcript ingest path), and 53 /
+`20260903000008` until `20260904000001` (revoking TRUNCATE, TRIGGER and
 REFERENCES from the browser roles). No correction has ever been noticed by a human
 reading the document; every one of them was this test failing a build.
 

@@ -5,8 +5,15 @@ BEGIN;
 SELECT plan(7);
 
 -- E1: ingest_whatsapp_message_event function exists
+-- Two parameters longer since 20260903000008: the media reference and its MIME
+-- type, which the transcription path needs and which nothing carried before.
+-- Pinned by exact signature on purpose — adding a DEFAULTed parameter to a
+-- PL/pgSQL function creates an OVERLOAD rather than replacing it, and leaves
+-- every existing call ambiguous, so a change here should have to be written
+-- down rather than absorbed.
 SELECT has_function('public', 'ingest_whatsapp_message_event', ARRAY[
-  'text', 'text', 'text', 'text', 'text', 'text', 'text', 'text', 'text', 'timestamptz', 'text'
+  'text', 'text', 'text', 'text', 'text', 'text', 'text', 'text', 'text', 'timestamptz',
+  'text', 'text', 'text'
 ], 'ingest_whatsapp_message_event exists');
 
 -- E2: process_inbound_message function exists

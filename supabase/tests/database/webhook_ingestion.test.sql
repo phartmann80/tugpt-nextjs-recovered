@@ -93,10 +93,12 @@ SELECT throws_ok(
 SELECT is(
   (SELECT count(*)::int FROM pg_catalog.pg_proc AS p
    CROSS JOIN LATERAL pg_catalog.unnest(p.proargnames) WITH ORDINALITY AS arg(name, idx)
-   WHERE p.oid = 'public.ingest_whatsapp_message_event(text,text,text,text,text,text,text,text,text,timestamp with time zone,text)'::regprocedure
+   WHERE p.oid = 'public.ingest_whatsapp_message_event(text,text,text,text,text,text,text,text,text,timestamp with time zone,text,text,text)'::regprocedure
    AND arg.name IN ('organization_id', 'org_id', 'tenant_id')),
   0,
-  'W10: ingest_whatsapp_message_event has no caller-supplied org_id/org_id/tenant_id parameter'
+  'W10: ingest_whatsapp_message_event has no caller-supplied org_id/org_id/tenant_id parameter '
+  '(signature widened by 20260903000008 to carry the media reference; the '
+  'organization is still resolved from the connection, never passed in)'
 );
 
 -- W11: Multiple messages in one envelope are independently ingested
