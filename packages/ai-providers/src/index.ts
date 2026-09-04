@@ -11,8 +11,18 @@
  * RETAINED BUT UNUSED: `anymize`, `logicc`, `mastra`, `openai`. These adapters
  * still implement `AIProviderAdapter` and are exported so that reintroducing a
  * provider later is a wiring change rather than a rewrite, but none of them is
- * imported by any production code path. Two of them carry explicit
- * restrictions from the 2026-08-18 provider simplification decision:
+ * imported by any production code path.
+ *
+ * That "wiring change rather than a rewrite" claim is now checked rather than
+ * asserted: `retained-adapters.test.ts` runs all four through one conformance
+ * suite. It was written because two of them did not satisfy the contract —
+ * `mastra` and `openai` threw a bare `Error` carrying the raw response body
+ * and dropped `options.signal`, so wiring either in would have produced errors
+ * the worker could not classify, a prompt-echo path into dead-letter records,
+ * and no latency budget. Both were corrected in the same change.
+ *
+ * Two of the four carry explicit restrictions from the 2026-08-18 provider
+ * simplification decision:
  *   - Logicc was cut entirely (cost).
  *   - Anymize must NOT be called from TuGPT under any configuration — it is
  *     used on other projects and cross-project coupling/usage bleed must be
