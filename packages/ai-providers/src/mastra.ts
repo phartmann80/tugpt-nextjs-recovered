@@ -1,5 +1,6 @@
 import { metricsCollector } from '@tugpt/observability';
 import type { AIProviderAdapter, ChatMessage, CompletionOptions, CompletionResponse } from './adapter';
+import { ProviderError, extractProviderDetail } from './errors';
 
 export interface MastraConfig {
   apiKey: string;
@@ -25,6 +26,11 @@ export class MastraAdapter implements AIProviderAdapter {
   ): Promise<CompletionResponse> {
     const startTime = Date.now();
     const agentName = options.model || this.defaultAgent;
+    // adapter.ts states that an aborted signal cancels the request and yields
+    // TIMEOUT. This adapter previously dropped the signal, so the
+    // orchestrator's 25-second budget did not apply to it at all and a hung
+    // request would have held a worker slot indefinitely.
+    const signal = options.signal;
 
     const requestBody = {
       agent: agentName,
@@ -43,12 +49,24 @@ export class MastraAdapter implements AIProviderAdapter {
           'X-Mastra-Api-Key': this.apiKey,
         },
         body: JSON.stringify(requestBody),
+        ...(signal ? { signal } : {}),
       });
 
       const latencyMs = Date.now() - startTime;
 
       if (!response.ok) {
-        const errorText = await response.text();
+        // Only the provider's structured error fields, sanitized and
+        // truncated -- never the raw body. This adapter used to interpolate
+        // the whole body into an Error message, which would have carried our
+        // prompt (or a customer's message, when a gateway echoes the request)
+        // into the dead-letter record the moment it was wired in.
+        let detail: string | undefined;
+        try {
+          detail = extractProviderDetail(await response.text());
+        } catch {
+          detail = undefined;
+        }
+
         metricsCollector.recordProviderCall({
           provider: this.providerName,
           model: agentName,
@@ -59,7 +77,7 @@ export class MastraAdapter implements AIProviderAdapter {
           success: false,
           errorCode: `HTTP_${response.status}`,
         });
-        throw new Error(`Mastra API Error (${response.status}): ${errorText}`);
+        throw ProviderError.fromHttpStatus(this.providerName, response.status, detail);
       }
 
       const data = (await response.json()) as {
@@ -98,6 +116,14 @@ export class MastraAdapter implements AIProviderAdapter {
       };
     } catch (err) {
       const latencyMs = Date.now() - startTime;
+
+      // Already classified by the HTTP branch above.
+      if (err instanceof ProviderError) throw err;
+
+      const category = err instanceof Error && err.name === 'AbortError'
+        ? 'TIMEOUT'
+        : 'NETWORK_FAILURE';
+
       metricsCollector.recordProviderCall({
         provider: this.providerName,
         model: agentName,
@@ -106,9 +132,12 @@ export class MastraAdapter implements AIProviderAdapter {
         totalTokens: 0,
         latencyMs,
         success: false,
-        errorCode: (err as Error).name || 'UNKNOWN',
+        errorCode: category,
       });
-      throw err;
+      // Previously this recorded `(err as Error).name` and re-threw the raw
+      // error, so a transport failure escaped as a TypeError with no category
+      // for the worker's transient/terminal classifier to read.
+      throw new ProviderError(this.providerName, category);
     }
   }
 }
