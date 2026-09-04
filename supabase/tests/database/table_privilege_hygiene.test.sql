@@ -140,6 +140,14 @@ SELECT is(
   'the guard query can see a violation, and this is the default state'
 );
 
+-- What the probe holds before the revoke, so H9 can assert the difference
+-- rather than an absolute set that varies with how the database was set up.
+CREATE TEMP TABLE _probe_before AS
+SELECT privilege_type
+FROM information_schema.role_table_grants
+WHERE table_schema = 'public' AND table_name = 'privilege_hygiene_probe'
+  AND grantee = 'authenticated';
+
 -- The migration's statement, verbatim, applied to the probe.
 REVOKE TRUNCATE, TRIGGER, REFERENCES ON public.privilege_hygiene_probe
   FROM anon, authenticated;
@@ -153,15 +161,29 @@ SELECT is(
   'H8: ...and the migration''s own REVOKE clears exactly those three'
 );
 
--- The other half of H8: the revoke took the three and nothing else. A REVOKE
+-- The other half of H8: the revoke took the three and NOTHING ELSE. A REVOKE
 -- that also removed SELECT would satisfy H8 and break the dashboard.
+--
+-- Stated as a difference rather than as an expected set, and that distinction
+-- is not stylistic. Written as an absolute — 'DELETE,INSERT,SELECT,UPDATE' —
+-- this assertion passed locally and failed in CI, because the exact default
+-- privileges a new table receives are a property of how the database was
+-- initialised, and the local harness only approximates that. What this test
+-- actually claims is about the REVOKE, not about the defaults: whatever the
+-- probe arrived holding, exactly three privileges left. That claim is true on
+-- any database, which is what makes it worth asserting.
 SELECT is(
-  (SELECT string_agg(DISTINCT privilege_type, ',' ORDER BY privilege_type)
-   FROM information_schema.role_table_grants
-   WHERE table_schema = 'public' AND table_name = 'privilege_hygiene_probe'
-     AND grantee = 'authenticated'),
-  'DELETE,INSERT,SELECT,UPDATE',
-  'H9: ...and left every DML privilege alone'
+  (SELECT string_agg(privilege_type, ',' ORDER BY privilege_type)
+   FROM (
+     SELECT privilege_type FROM _probe_before
+     EXCEPT
+     SELECT privilege_type
+     FROM information_schema.role_table_grants
+     WHERE table_schema = 'public' AND table_name = 'privilege_hygiene_probe'
+       AND grantee = 'authenticated'
+   ) removed),
+  'REFERENCES,TRIGGER,TRUNCATE',
+  'H9: the REVOKE removed exactly those three from authenticated and nothing else'
 );
 
 SELECT * FROM finish();
