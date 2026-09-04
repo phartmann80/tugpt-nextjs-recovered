@@ -106,7 +106,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Shellcheck
-        run: shellcheck -s sh deploy/*.sh deploy/caddy/*.sh .github/scripts/*.sh
+        run: shellcheck -s sh deploy/*.sh deploy/caddy/*.sh .github/scripts/*.sh scripts/database-tests/reset_db.test.sh
 
       - name: Run host-check fixtures
         run: sh deploy/check-host.test.sh
@@ -121,6 +121,15 @@ jobs:
       # log-grep would call a pass.
       - name: Run worker-boot-check fixtures
         run: sh .github/scripts/worker-boot-check.test.sh
+
+      # scripts/database-tests/ is the local pgTAP harness. It is not a gate --
+      # `supabase db start` in the database-tests job is -- but it reported
+      # green on six pull requests whose database-tests job was red, because it
+      # differed from a real Supabase database in two specific ways. Those two
+      # properties are now asserted, in both directions, so they cannot be
+      # dropped again without this failing. Needs no database and no network.
+      - name: Run local-db harness fixtures
+        run: sh scripts/database-tests/reset_db.test.sh
 
   docker-build:
     runs-on: ubuntu-latest
