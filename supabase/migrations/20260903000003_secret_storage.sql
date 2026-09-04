@@ -250,9 +250,6 @@ ALTER TABLE public.platform_secrets FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.organization_secrets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.organization_secrets FORCE ROW LEVEL SECURITY;
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.platform_secrets TO service_role;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.organization_secrets TO service_role;
-
 -- REVOKE ALL rather than REVOKE INSERT, UPDATE, DELETE, and no re-grant.
 --
 -- The narrower form leaves REFERENCES and TRIGGER behind — which is exactly
@@ -262,8 +259,34 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON public.organization_secrets TO service_r
 -- learn whether a given value exists. Neither role gets anything here, and
 -- there is no SELECT to re-grant, because the metadata function above is the
 -- only read path an organization has.
-REVOKE ALL ON public.platform_secrets FROM authenticated, anon;
-REVOKE ALL ON public.organization_secrets FROM authenticated, anon;
+--
+-- AND service_role IS IN THIS LIST, which it was not when this migration first
+-- shipped. That omission is worth writing down rather than quietly correcting,
+-- because the reasoning above was already here and was simply applied to the
+-- wrong set of roles.
+--
+-- Supabase's initialisation runs `ALTER DEFAULT PRIVILEGES IN SCHEMA public
+-- GRANT ALL ON TABLES TO ... service_role`, so both tables are created with
+-- ALL already granted to service_role. A GRANT of the four verbs this backend
+-- needs therefore adds nothing and takes nothing away: REFERENCES, TRIGGER and
+-- TRUNCATE were present from CREATE TABLE and stayed. Only a REVOKE removes
+-- them, and it has to come before the GRANT.
+--
+-- What that left on a credential table: TRUNCATE, so one statement destroys
+-- every organization's stored credentials; and TRIGGER, so a compromised
+-- service key can attach a function that fires on every write to this table —
+-- with the plaintext in hand, before the ciphertext is at rest. Encrypting the
+-- column and then leaving TRIGGER on it is most of the way to not encrypting
+-- it at all.
+--
+-- `supabase/tests/database/secret_storage.test.sql` A8/A8b assert the exact
+-- privilege set for BOTH tables. A8 existed and was correct from the start;
+-- it failed on the very first CI run of this branch and every run after it.
+REVOKE ALL ON public.platform_secrets FROM PUBLIC, authenticated, anon, service_role;
+REVOKE ALL ON public.organization_secrets FROM PUBLIC, authenticated, anon, service_role;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.platform_secrets TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.organization_secrets TO service_role;
 
 REVOKE ALL ON FUNCTION public.organization_connected_accounts(UUID) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.organization_connected_accounts(UUID)
