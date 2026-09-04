@@ -2,7 +2,7 @@
 
 **Status:** active
 **Gate:** CI job `database-tests` in `.github/workflows/ci.yml`
-**Files:** <!-- database-tests-count:start -->`supabase/tests/database/*.sql` — 30 files<!-- database-tests-count:end -->, ~655 pgTAP assertions
+**Files:** <!-- database-tests-count:start -->`supabase/tests/database/*.sql` — 31 files<!-- database-tests-count:end -->, ~694 pgTAP assertions
 
 ## Why this document exists
 
@@ -69,6 +69,7 @@ container — use it after adding a migration rather than restarting.
 | `conversation_assignment_and_handoff.test.sql` | that `needs_human` actually stops AI drafting — proved end to end through `process_inbound_message` with positive controls in both directions, since a status column that no code reads would look identical — plus assignment compare-and-set, the `conversation_events` record of who switched it, and that erasing a reviewer releases their conversations instead of blocking the delete |
 | `provider_usage_and_cost.test.sql` | token and cost accounting — that an event's cost equals the sum of its components (tampering with either side is refused), that an unpriced call is recorded with a NULL cost rather than dropped or valued at zero, that a later price change does not re-price history, and that audio bills on the provider's `billing_time` (duration x channels) rather than on the duration we measured |
 | `table_privilege_hygiene.test.sql` | the one privilege rule that row policies cannot enforce — that no table in `public` grants TRUNCATE, TRIGGER or REFERENCES to `anon` or `authenticated`, checked as a query over the catalogue rather than a list of table names so a table added tomorrow is covered; with positive controls that the DML those roles need is still present, that `service_role` was left alone, and — by creating a table inside the test — that a brand-new table arrives holding all three for both roles, which is why the guard exists rather than a one-time revoke |
+| `secret_storage.test.sql` | encrypted credential storage — that `authenticated` and `anon` hold *nothing* on either table (not even SELECT, and specifically not TRIGGER or REFERENCES), that the metadata reader returns an exact column set carrying no ciphertext, iv, auth_tag or key_id, that a wrong-length GCM nonce or truncated tag is refused at the write, and that a nonce reused under one key is refused |
 
 ## Writing a test
 
