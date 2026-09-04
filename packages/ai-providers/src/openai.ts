@@ -1,5 +1,6 @@
 import { metricsCollector } from '@tugpt/observability';
 import type { AIProviderAdapter, ChatMessage, CompletionOptions, CompletionResponse } from './adapter';
+import { ProviderError, extractProviderDetail } from './errors';
 
 export interface OpenAIConfig {
   apiKey: string;
@@ -25,6 +26,11 @@ export class OpenAIAdapter implements AIProviderAdapter {
   ): Promise<CompletionResponse> {
     const startTime = Date.now();
     const model = options.model || this.defaultModel;
+    // adapter.ts states that an aborted signal cancels the request and yields
+    // TIMEOUT. This adapter previously dropped the signal, so the
+    // orchestrator's 25-second budget did not apply to it at all and a hung
+    // request would have held a worker slot indefinitely.
+    const signal = options.signal;
 
     try {
       const response = await fetch(`${this.baseUrl}/chat/completions`, {
@@ -39,12 +45,25 @@ export class OpenAIAdapter implements AIProviderAdapter {
           temperature: options.temperature ?? 0.7,
           max_tokens: options.maxTokens ?? 1024,
         }),
+        ...(signal ? { signal } : {}),
       });
 
       const latencyMs = Date.now() - startTime;
 
       if (!response.ok) {
-        const errorText = await response.text();
+        // Only the provider's structured error fields, sanitized and
+        // truncated -- never the raw body. This adapter used to throw
+        // `new Error(\`OpenAI API Error (${response.status}): ${errorText}\`)`
+        // with the whole body interpolated, which would have carried our
+        // prompt (or a customer's message, when a provider echoes the
+        // request) into the dead-letter record the moment it was wired in.
+        let detail: string | undefined;
+        try {
+          detail = extractProviderDetail(await response.text());
+        } catch {
+          detail = undefined;
+        }
+
         metricsCollector.recordProviderCall({
           provider: this.providerName,
           model,
@@ -55,7 +74,7 @@ export class OpenAIAdapter implements AIProviderAdapter {
           success: false,
           errorCode: `HTTP_${response.status}`,
         });
-        throw new Error(`OpenAI API Error (${response.status}): ${errorText}`);
+        throw ProviderError.fromHttpStatus(this.providerName, response.status, detail);
       }
 
       const data = (await response.json()) as {
@@ -93,6 +112,14 @@ export class OpenAIAdapter implements AIProviderAdapter {
       };
     } catch (err) {
       const latencyMs = Date.now() - startTime;
+
+      // Already classified by the HTTP branch above.
+      if (err instanceof ProviderError) throw err;
+
+      const category = err instanceof Error && err.name === 'AbortError'
+        ? 'TIMEOUT'
+        : 'NETWORK_FAILURE';
+
       metricsCollector.recordProviderCall({
         provider: this.providerName,
         model,
@@ -101,9 +128,12 @@ export class OpenAIAdapter implements AIProviderAdapter {
         totalTokens: 0,
         latencyMs,
         success: false,
-        errorCode: (err as Error).name || 'UNKNOWN',
+        errorCode: category,
       });
-      throw err;
+      // Previously this recorded `(err as Error).name` and re-threw the raw
+      // error, so a transport failure escaped as a TypeError with no category
+      // for the worker's transient/terminal classifier to read.
+      throw new ProviderError(this.providerName, category);
     }
   }
 }
