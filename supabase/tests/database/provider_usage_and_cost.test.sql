@@ -30,7 +30,7 @@
 -- understates every stereo recording by 100% and surfaces on an invoice.
 
 BEGIN;
-SELECT plan(43);
+SELECT plan(44);
 
 -- --- Fixtures --------------------------------------------------------------
 
@@ -44,17 +44,21 @@ INSERT INTO public.organization_members (organization_id, user_id, role) VALUES
   ('aaaaaaaa-c057-0000-0000-000000000001', '11111111-c057-0000-0000-000000000001', 'owner');
 
 -- Rates chosen to make the arithmetic checkable by eye rather than realistic.
--- The audio rate is the real one: $0.61/hour = 0.0001694444 USD/second.
+--
+-- NO gladia FIXTURE. This file used to seed one, and 20260903000004 now seeds
+-- the real rate — two rows for (gladia, NULL, audio_seconds) with open-ended
+-- ranges, which the GiST exclusion refuses with 23P01. The right resolution is
+-- this one rather than narrowing the constraint: the audio assertions below
+-- are worth more against the rate the migration actually deploys than against
+-- a fixture that merely copies it. If someone fat-fingers the seeded decimal
+-- point, A1 and A2 now say so.
 INSERT INTO public.provider_prices
   (provider, model, dimension, unit_price, source, effective_from)
 VALUES
   ('testprov', 'test-model', 'input_tokens',  0.0000100000,
    'fixture: round number, arithmetic checkable by eye', '2020-01-01'),
   ('testprov', 'test-model', 'output_tokens', 0.0000300000,
-   'fixture: three times the input rate, so a swap is visible', '2020-01-01'),
-  ('gladia',   NULL,         'audio_seconds', 0.0001694444,
-   'gladia.io Starter pay-as-you-go async $0.61/hour, verified 2026-09-03',
-   '2020-01-01');
+   'fixture: three times the input rate, so a swap is visible', '2020-01-01');
 
 -- --- S: shape ---------------------------------------------------------------
 
@@ -70,8 +74,21 @@ SELECT is(
   (SELECT count(*)::int FROM public.provider_prices
     WHERE provider NOT IN ('testprov', 'gladia')),
   0,
-  'S5: the price book ships with no real rates — a wrong price makes cost '
-  'plausibly wrong, where a missing one makes it visibly unknown'
+  'S5: gladia is the only real rate the migrations seed — a wrong price makes '
+  'cost plausibly wrong, where a missing one makes it visibly unknown, so '
+  'every addition here should be a deliberate act with a failing test'
+);
+
+-- Langdock in particular has NO seeded price, and that is the current state of
+-- knowledge rather than an oversight: its per-model rates are not confirmed,
+-- and neither is its billing currency (it is a German vendor and the currency
+-- column is CHECKed to USD). Until both are answered, Langdock calls record as
+-- priced-unknown, which is visible, instead of as a plausible wrong number.
+SELECT is(
+  (SELECT count(*)::int FROM public.provider_prices WHERE provider = 'langdock'),
+  0,
+  'S6: langdock has no seeded rate, pending its confirmed per-model prices '
+  'and billing currency'
 );
 
 -- --- R: price resolution ----------------------------------------------------
