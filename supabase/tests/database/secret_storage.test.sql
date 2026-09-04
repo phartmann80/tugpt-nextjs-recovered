@@ -29,7 +29,7 @@
 -- implementation — anything that hardcodes an IV hits it on the second row.
 
 BEGIN;
-SELECT plan(30);
+SELECT plan(31);
 
 -- --- Fixtures --------------------------------------------------------------
 
@@ -299,6 +299,18 @@ SELECT table_privs_are('public', 'organization_secrets', 'service_role',
   ARRAY['SELECT','INSERT','UPDATE','DELETE'],
   'A8: service_role has exactly what it needs and no more — UPDATE is there '
   'for key rotation, DELETE for disconnecting an account');
+
+-- The other half of the same claim, and it was missing.
+--
+-- A8 covered organization_secrets alone, so when the migration failed to
+-- revoke service_role's default ALL, exactly one of the two credential tables
+-- reported it. The tables are created by the same migration with the same
+-- intent, and an assertion that covers one of a pair is how the other one
+-- drifts — this file already makes that argument about anon and authenticated
+-- in A1-A4, which do cover both.
+SELECT table_privs_are('public', 'platform_secrets', 'service_role',
+  ARRAY['SELECT','INSERT','UPDATE','DELETE'],
+  'A8b: ...and the same on platform_secrets, which A8 alone did not cover');
 
 -- --- D: lifecycle ----------------------------------------------------------
 
