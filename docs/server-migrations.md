@@ -222,10 +222,23 @@ the resolved credentials, and `[ok]` lines for the service-role connection, the
 `whatsapp_integration` check, the test organization and `preflight complete`.
 Those are not reproduced here; do not read extra lines as a problem.
 
+Since 2026-09-03 it also reports the age of each FX rate, for example
+`[ok]   EUR->USD rate is from 2026-09-02 (1 days old)`. Past the freshness
+threshold that line becomes a `[WARN]` asking for a refresh from the ECB daily
+reference rate. **It never fails the gate.** Provider spend keeps converting at
+the old rate, because an old official rate beats refusing enforcement, and the
+rate and its date are stored on every converted row so staleness can move an
+enforcement decision but never corrupt a recorded total.
+
+Refreshing is a manual monthly job by decision, which is exactly why the
+reminder lives in a gate that runs on every deploy rather than in someone's
+calendar. To refresh, insert a row into `fx_rates` with the new rate, its ECB
+reference date, and a source naming both.
+
 <!-- schema-gate-sample:start -->
 
 ```
-  [ok]   all 51 migration(s) in this checkout are applied (database has 51, latest 20260904000001)
+  [ok]   all 53 migration(s) in this checkout are applied (database has 53, latest 20260904000001)
   [ok]   20260819000001: failed_jobs.provider_error_detail column — column is selectable
   [ok]   20260819000001: archive_draft_failed_job 4-argument overload (extended error-code allowlist) — signature present, returned P3B07 DRAFT_JOB_NOT_FOUND
   [ok]   database schema matches this checkout
@@ -248,8 +261,10 @@ it to 46 / `20260903000001`, 46 / `20260903000001` until `20260903000002`
 (provider usage and cost), 47 / `20260903000002` until `20260903000003`
 (secret storage), 48 / `20260903000003` until `20260903000004` (the
 voice-transcription flag and the Gladia rate), 49 / `20260903000004` until
-`20260903000005` (multi-currency and the Langdock rates), and 50 /
-`20260903000005` until `20260904000001` (revoking TRUNCATE, TRIGGER and
+`20260903000005` (multi-currency and the Langdock rates), 50 /
+`20260903000005` until `20260903000006` (FX conversion), 51 / `20260903000006`
+until `20260903000007` (the FX status RPC the preflight gate reads), and 52 /
+`20260903000007` until `20260904000001` (revoking TRUNCATE, TRIGGER and
 REFERENCES from the browser roles). No correction has ever been noticed by a human
 reading the document; every one of them was this test failing a build.
 
