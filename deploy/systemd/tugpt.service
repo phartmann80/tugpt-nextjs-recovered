@@ -16,22 +16,64 @@
 #   systemctl restart tugpt       # recreate containers
 #   journalctl -u tugpt -f        # follow compose output
 #
-# See docs/production_environment.md (section 5) for the full runbook,
-# including the expected working directory layout and /etc/tugpt/*.env
-# files this depends on.
+# See docs/production_environment.md for the full runbook, including the
+# expected working directory layout and /etc/tugpt/*.env files this
+# depends on.
+#
+# STATUS: enabled and active in production as of the 2026-08-25 rebuild.
+#
+# The earlier "DO NOT ENABLE THIS UNIT YET" warning that stood here was
+# about a host that no longer exists. It said this unit must wait for a
+# cutover from tugpt-whatsapp-worker.service and tugpt-draft-worker.service,
+# because two consumers on one PGMQ queue double-process every message.
+# That reasoning is still correct; its premise is not. The host was
+# reinstalled after the 2026-08-24 compromise and no native worker units
+# came back, so there was no cutover to perform and never a moment with two
+# consumers on a queue. This unit went straight to owning the whole stack.
+#
+# tugpt-web.service brings up `web` alone and belongs to the earlier
+# web-only deployment. The two units declare Conflicts= on each other so
+# they cannot both be active — leave it that way.
+#
+# Both Exec lines pass `--profile proxy`, so this unit owns the Caddy
+# container as well as web and the two workers. Added 2026-08-26.
+#
+# It was not always so, and the reason for the change is worth keeping. The
+# unit used to run without the profile, which left Caddy started by hand and
+# outside the thing that claims to own the stack. A `--dry-run` on 2026-08-25
+# established that `up -d --build --remove-orphans` touched only web and the
+# workers — Caddy was neither stopped nor removed — so there was no active
+# hazard, and its `restart: unless-stopped` policy meant it survived reboots
+# too.
+#
+# It is still the wrong shape. TLS was depending on an orphan-exemption plus a
+# container restart policy rather than on the unit that supervises the stack:
+# two behaviours that happen to be favourable, neither of which anything here
+# asserts. Passing the profile makes ownership explicit instead of lucky.
+#
+# One consequence to expect: a `systemctl restart tugpt.service` now recycles
+# Caddy along with everything else, where before it left the container alone.
+# That is a brief interruption, not a re-issuance — the certificate and ACME
+# account key live in the caddy_data named volume, so Caddy reloads what it
+# already has rather than going back to Let's Encrypt.
 
 [Unit]
-Description=TuGPT.ai Docker Compose stack
+Description=TuGPT Docker Compose stack
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
+Conflicts=tugpt-web.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/opt/tugpt
-ExecStart=/usr/bin/docker compose -p tugpt -f /opt/tugpt/docker-compose.yml up -d --build --remove-orphans
-ExecStop=/usr/bin/docker compose -p tugpt -f /opt/tugpt/docker-compose.yml down
+# Supplies NEXT_PUBLIC_* for Compose build-arg interpolation; docker-compose.yml
+# declares them with `:?` so a missing value fails the unit instead of baking an
+# empty string into the web image.
+EnvironmentFile=/etc/tugpt/web.env
+ExecStart=/usr/bin/docker compose -p tugpt -f /opt/tugpt/docker-compose.yml --profile proxy up -d --build --remove-orphans
+ExecStop=/usr/bin/docker compose -p tugpt -f /opt/tugpt/docker-compose.yml --profile proxy down
 TimeoutStartSec=0
 
 [Install]

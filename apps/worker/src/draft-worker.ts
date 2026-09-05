@@ -17,9 +17,15 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { Logger } from '@tugpt/observability';
 import { DraftPgmqAdapter } from './draft-queue-adapter.js';
 import { DraftOrchestrator } from '@tugpt/ai-orchestration';
-import type { DraftRequest, DraftConfig } from '@tugpt/ai-orchestration';
+import type { DraftRequest, DraftConfig, DraftResult } from '@tugpt/ai-orchestration';
+import { DEFAULT_ORGANIZATION_LOCALE, normalizeOrganizationLocale } from '@tugpt/database';
 import type { ProviderErrorCategory } from '@tugpt/ai-providers';
-import { mapProviderErrorToDbCode, isTransientCategory, type DraftErrorCode } from './draft-rpc-error-codes.js';
+import {
+  mapProviderErrorToDbCode,
+  isTransientCategory,
+  type DraftErrorCode,
+  type DraftSkipReason,
+} from './draft-rpc-error-codes.js';
 
 /** Retry visibility delays per Paul's amendment #7. */
 const RETRY_DELAY_1 = 5;   // read_ct = 1 failure → 5 seconds
@@ -216,6 +222,43 @@ export class DraftWorker {
         return;
       }
 
+      // reserve_draft_usage has five outcomes, and two of them mean this job
+      // is already finished:
+      //
+      //   ALREADY_CONSUMED     store_draft ran; a draft exists for this job.
+      //   RESERVATION_RELEASED the job was archived; it is dead-lettered.
+      //
+      // Either way the queue message is stale — it outlived the job. That
+      // happens when store_draft succeeds and queue.deleteJob does not: a
+      // dropped connection does it, and so does SIGKILL at the end of
+      // stop_grace_period, which is what this worker gets on a deploy while a
+      // job is in flight.
+      //
+      // Falling through here used to be unbounded. The provider was called
+      // again (real spend), store_draft then raised P3B10, the catch archived
+      // it, the archive raised P3B12 because the job was already completed,
+      // the DRAFT_INTERNAL_ERROR fallback raised P3B12 as well — the status
+      // check sits above the error-code allowlist — and the message was left
+      // on the queue to be redelivered and do it all again. One provider call
+      // per lap, forever.
+      //
+      // ALREADY_RESERVED deliberately does NOT terminate: that is the ordinary
+      // retry, where a previous attempt reserved quota and failed before
+      // storing anything, and it should generate.
+      if (
+        reservation.status === 'ALREADY_CONSUMED' ||
+        reservation.status === 'RESERVATION_RELEASED'
+      ) {
+        logger.info('Draft job already terminal; discarding stale queue message', {
+          draftGenerationJobId,
+          requestId,
+          reservationStatus: reservation.status,
+          attempt: readCt,
+        });
+        await this.queue.deleteJob(msgId);
+        return;
+      }
+
       // Step 6: Call orchestrator
       const draftRequest: DraftRequest = {
         sourceMessageText: sourceText,
@@ -238,7 +281,21 @@ export class DraftWorker {
           result.result.model
         );
 
-        // Step 8: Delete queue message
+        // Step 8: Record what the call consumed and what it cost.
+        //
+        // After storeDraft, not before: the draft is the customer-visible work
+        // and must not be undone by a bookkeeping failure. That ordering is
+        // also why recordUsage swallows its own errors — see the comment there
+        // for the trade and its named successor.
+        await this.recordUsage(
+          jobRow.organization_id,
+          draftGenerationJobId,
+          jobRow.source_message_id,
+          requestId,
+          result.result
+        );
+
+        // Step 9: Delete queue message
         await this.queue.deleteJob(msgId);
 
         logger.info('Draft generated successfully', {
@@ -389,7 +446,36 @@ export class DraftWorker {
       responseRules: data.response_rules,
       tone: data.tone,
       maxDraftLength: data.max_draft_length,
+      locale: await this.loadOrganizationLocale(organizationId),
     };
+  }
+
+  /**
+   * The organization's dashboard language, which is also its prompt language.
+   *
+   * A second query rather than a join. `ai_draft_configs` has no foreign key to
+   * `organizations` that PostgREST would embed, and one more round trip on a
+   * path that is about to spend seconds inside a provider call is not worth
+   * arranging one for.
+   *
+   * Never throws, and never returns null. A draft is not worth failing over a
+   * language lookup: Spanish is the product default and a complete, correct
+   * prompt for every organization that exists. The cost of guessing wrong is a
+   * prompt in the wrong language, which the guardrail's "reply in the
+   * customer's language" rule largely absorbs; the cost of throwing is a
+   * dead-lettered job.
+   */
+  private async loadOrganizationLocale(organizationId: string): Promise<string> {
+    const { data, error } = await this.client
+      .from('organizations')
+      .select('locale')
+      .eq('id', organizationId)
+      .single();
+
+    if (error || !data) {
+      return DEFAULT_ORGANIZATION_LOCALE;
+    }
+    return normalizeOrganizationLocale(data.locale);
   }
 
   private async reserveQuota(jobId: string): Promise<{ status: string; reason: string | null }> {
@@ -403,6 +489,74 @@ export class DraftWorker {
 
     const result = data as { status: string; reason: string | null };
     return { status: result.status, reason: result.reason };
+  }
+
+  /**
+   * Records one provider call against the organization's cost meter.
+   *
+   * Deliberately does not throw. By the time this runs the draft is stored and
+   * the provider has already charged for the call; failing the job here would
+   * retry a draft that already exists, which is a worse outcome than a missing
+   * accounting row. So a failure is logged at error level WITH THE QUANTITIES,
+   * so the number is recoverable from the logs rather than simply gone.
+   *
+   * The honest limitation: this is a second transaction, so a crash between
+   * storeDraft and here loses the usage. Making it atomic means folding the
+   * usage arguments into the store RPC — a real option, deliberately not taken
+   * in this change because it couples two things that are otherwise
+   * independent, and the loss window is one RPC wide.
+   */
+  private async recordUsage(
+    organizationId: string,
+    draftGenerationJobId: string,
+    sourceMessageId: string,
+    requestId: string | undefined,
+    result: DraftResult
+  ): Promise<void> {
+    // Inside the try, not above it. Reading result.usage is itself a place this
+    // can throw — a provider returning a response without a usage block would
+    // otherwise take down a draft job that had already succeeded, which is the
+    // exact outcome this method exists to avoid. Found by the lifecycle test,
+    // whose fixture had no usage block.
+    try {
+      const quantities = {
+        input_tokens: result.usage.promptTokens,
+        output_tokens: result.usage.completionTokens,
+      };
+
+      const { error } = await this.client.rpc('record_provider_usage', {
+        p_organization_id: organizationId,
+        p_modality: 'text',
+        p_provider: result.provider,
+        p_model: result.model,
+        p_quantities: quantities,
+        p_provider_reference: result.providerReference,
+        p_request_id: requestId ?? draftGenerationJobId,
+        p_draft_generation_job_id: draftGenerationJobId,
+        p_message_id: sourceMessageId,
+        p_metadata: { latency_ms: result.latencyMs },
+      });
+
+      if (error) {
+        throw new Error(error.message);
+      }
+    } catch (err) {
+      logger.error(
+        'Failed to record provider usage; the draft is unaffected',
+        err instanceof Error ? err : new Error(String(err)),
+        {
+          draftGenerationJobId,
+          requestId,
+          provider: result.provider,
+          model: result.model,
+          // The quantities are logged so the cost is reconstructible by hand.
+          // A row we could not write is recoverable; a number we never printed
+          // is not.
+          promptTokens: result.usage.promptTokens,
+          completionTokens: result.usage.completionTokens,
+        }
+      );
+    }
   }
 
   private async storeDraft(
@@ -470,6 +624,22 @@ export class DraftWorker {
       attemptedErrorCode: errorCode,
     });
 
+    // P3B12 says the job is already completed or skipped. There is nothing to
+    // archive, and the DRAFT_INTERNAL_ERROR fallback cannot help: the RPC
+    // checks the job status before it checks the error code, so the retry
+    // raises P3B12 too. What is left is a stale queue message, and leaving it
+    // queued means it is redelivered indefinitely — which is the loop this
+    // whole path exists to prevent. Delete it.
+    if (error.code === 'P3B12') {
+      logger.info('Archive refused: job already terminal. Discarding stale queue message', {
+        draftGenerationJobId: jobId,
+        queueMessageId: msgId.toString(),
+        attemptedErrorCode: errorCode,
+      });
+      await this.queue.deleteJob(msgId);
+      return;
+    }
+
     if (errorCode === 'DRAFT_INTERNAL_ERROR') {
       // The guaranteed-accepted code was itself rejected. Nothing further to
       // try; leaving the message queued is preferable to losing it silently.
@@ -500,7 +670,7 @@ export class DraftWorker {
     }
   }
 
-  private async skipJob(jobId: string, msgId: bigint, reason: string): Promise<void> {
+  private async skipJob(jobId: string, msgId: bigint, reason: DraftSkipReason): Promise<void> {
     const { error } = await this.client.rpc('skip_draft_job', {
       p_draft_generation_job_id: jobId,
       p_msg_id: msgId.toString(),

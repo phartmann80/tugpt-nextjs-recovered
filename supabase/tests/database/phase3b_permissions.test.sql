@@ -9,9 +9,9 @@ SELECT plan(28);
 -- =============================================================================
 INSERT INTO auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_app_meta_data, raw_user_meta_data, is_super_admin, confirmation_token, recovery_token, email_change_token_new, email_change)
 VALUES
-  ('00000000-0000-0000-0000-000000000000','11111111-1111-1111-1111-111111111111','authenticated','authenticated','owner@tugpt.ai','','2026-01-01 00:00:00','2026-01-01 00:00:00','2026-01-01 00:00:00','{}','{}',false,'','','',''),
-  ('00000000-0000-0000-0000-000000000000','22222222-2222-2222-2222-222222222222','authenticated','authenticated','agent@tugpt.ai','','2026-01-01 00:00:00','2026-01-01 00:00:00','2026-01-01 00:00:00','{}','{}',false,'','','',''),
-  ('00000000-0000-0000-0000-000000000000','55555555-5555-5555-5555-555555555555','authenticated','authenticated','viewer@tugpt.ai','','2026-01-01 00:00:00','2026-01-01 00:00:00','2026-01-01 00:00:00','{}','{}',false,'','','','')
+  ('00000000-0000-0000-0000-000000000000','11111111-1111-1111-1111-111111111111','authenticated','authenticated','owner@example.com','','2026-01-01 00:00:00','2026-01-01 00:00:00','2026-01-01 00:00:00','{}','{}',false,'','','',''),
+  ('00000000-0000-0000-0000-000000000000','22222222-2222-2222-2222-222222222222','authenticated','authenticated','agent@example.com','','2026-01-01 00:00:00','2026-01-01 00:00:00','2026-01-01 00:00:00','{}','{}',false,'','','',''),
+  ('00000000-0000-0000-0000-000000000000','55555555-5555-5555-5555-555555555555','authenticated','authenticated','viewer@example.com','','2026-01-01 00:00:00','2026-01-01 00:00:00','2026-01-01 00:00:00','{}','{}',false,'','','','')
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO public.organizations (id, name, slug) VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Test Org', 'phase3b-perm-org');
@@ -223,6 +223,17 @@ SELECT is(
   'P10: is_feature_enabled returns false when global flag disabled'
 );
 
+
+-- Migration 20260826000001 added a trigger on feature_flags: enabling
+-- ai_draft_generation for an organization requires that organization to have a
+-- draft_quota_limits row covering today. These fixtures enable that flag as
+-- setup for testing something else (RLS / permissions), so they now need the
+-- precondition the product itself needs. The assertions below are unchanged.
+INSERT INTO public.draft_quota_limits (organization_id, period_start, period_end, hard_ceiling)
+VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', date_trunc('month', CURRENT_DATE)::date,
+        (date_trunc('month', CURRENT_DATE) + INTERVAL '1 month')::date, 1000)
+ON CONFLICT DO NOTHING;
+
 -- P11: is_feature_enabled returns true when both global and org flags are enabled
 UPDATE public.feature_flags SET is_enabled = true WHERE organization_id IS NULL AND key = 'ai_draft_generation';
 INSERT INTO public.feature_flags (organization_id, key, is_enabled, rules)
@@ -405,6 +416,12 @@ INSERT INTO public.feature_flags (organization_id, key, is_enabled, rules)
 VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'ai_draft_generation', true, '{}'::jsonb)
 ON CONFLICT DO NOTHING;
 
+-- Same precondition as above, for the cross-org isolation fixture.
+INSERT INTO public.draft_quota_limits (organization_id, period_start, period_end, hard_ceiling)
+VALUES ('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', date_trunc('month', CURRENT_DATE)::date,
+        (date_trunc('month', CURRENT_DATE) + INTERVAL '1 month')::date, 1000)
+ON CONFLICT DO NOTHING;
+
 -- Ensure org-scoped flag exists for other org
 INSERT INTO public.feature_flags (organization_id, key, is_enabled, rules)
 VALUES ('eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', 'ai_draft_generation', true, '{}'::jsonb)
@@ -431,7 +448,7 @@ SELECT is((SELECT count FROM _p21), 0, 'P21: anon cannot read any feature flags'
 -- P22: authenticated user without membership reads none
 -- Create a user with no org membership
 INSERT INTO auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_app_meta_data, raw_user_meta_data, is_super_admin, confirmation_token, recovery_token, email_change_token_new, email_change)
-VALUES ('00000000-0000-0000-0000-000000000000','99999999-9999-9999-9999-999999999999','authenticated','authenticated','nobody@tugpt.ai','','2026-01-01 00:00:00','2026-01-01 00:00:00','2026-01-01 00:00:00','{}','{}',false,'','','','')
+VALUES ('00000000-0000-0000-0000-000000000000','99999999-9999-9999-9999-999999999999','authenticated','authenticated','nobody@example.com','','2026-01-01 00:00:00','2026-01-01 00:00:00','2026-01-01 00:00:00','{}','{}',false,'','','','')
 ON CONFLICT (id) DO NOTHING;
 
 SELECT set_config('request.jwt.claims', '{"sub":"99999999-9999-9999-9999-999999999999","role":"authenticated"}', true);

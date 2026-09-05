@@ -17,6 +17,13 @@
  * file for any reason without an explicit, separate decision to reverse
  * the 2026-08-18 isolation call.
  *
+ * That last sentence is now enforced rather than merely written:
+ * `apps/worker/tests/production-never-imports-cut-providers.test.ts` fails if
+ * either adapter is imported or constructed anywhere in production source.
+ * A comment is invisible to someone editing a different file and survives no
+ * refactor that moves this wiring; the guard covers every package, and also
+ * fails if the adapters are deleted, since ADR-006 keeps them on purpose.
+ *
  * MODEL SELECTION (rotation added 2026-08-19)
  *
  *   LANGDOCK_MODELS  Ordered, comma-separated rotation list, cheapest first.

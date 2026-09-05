@@ -6,6 +6,9 @@
 
 import { useState, useEffect } from 'react';
 import type { Revision, ApiError } from '@/lib/draft-api/types';
+import { apiErrorText } from '@/lib/draft-api/error-text';
+import { formatDateTime } from '@/i18n';
+import { useT } from '@/i18n/provider';
 
 interface DraftRevisionHistoryProps {
   draftId: string;
@@ -13,6 +16,7 @@ interface DraftRevisionHistoryProps {
 }
 
 export function DraftRevisionHistory({ draftId, currentVersion }: DraftRevisionHistoryProps) {
+  const t = useT();
   const [revisions, setRevisions] = useState<Revision[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -23,26 +27,28 @@ export function DraftRevisionHistory({ draftId, currentVersion }: DraftRevisionH
         const res = await fetch(`/api/v1/drafts/${draftId}/revisions`);
         if (!res.ok) {
           const data: ApiError = await res.json();
-          setError(data.error?.message || 'Failed to load revisions');
+          setError(apiErrorText(t, data));
           return;
         }
         const data = await res.json();
         setRevisions(data.revisions || []);
       } catch {
-        setError('Failed to load revisions');
+        setError(t('drafts.revisions.loadFailed'));
       } finally {
         setLoading(false);
       }
     };
 
     fetchRevisions();
-  }, [draftId]);
+  }, [draftId, t]);
 
   if (loading) {
     return (
       <div className="mb-6">
-        <h2 className="mb-2 text-lg font-semibold text-zinc-800">Revision History</h2>
-        <p className="text-sm text-zinc-500">Loading...</p>
+        <h2 className="mb-2 text-lg font-semibold text-zinc-800">
+          {t('drafts.revisions.heading')}
+        </h2>
+        <p className="text-sm text-zinc-500">{t('common.loading')}</p>
       </div>
     );
   }
@@ -50,7 +56,9 @@ export function DraftRevisionHistory({ draftId, currentVersion }: DraftRevisionH
   if (error) {
     return (
       <div className="mb-6">
-        <h2 className="mb-2 text-lg font-semibold text-zinc-800">Revision History</h2>
+        <h2 className="mb-2 text-lg font-semibold text-zinc-800">
+          {t('drafts.revisions.heading')}
+        </h2>
         <p className="text-sm text-red-600">{error}</p>
       </div>
     );
@@ -62,7 +70,9 @@ export function DraftRevisionHistory({ draftId, currentVersion }: DraftRevisionH
 
   return (
     <div className="mb-6">
-      <h2 className="mb-3 text-lg font-semibold text-zinc-800">Revision History</h2>
+      <h2 className="mb-3 text-lg font-semibold text-zinc-800">
+        {t('drafts.revisions.heading')}
+      </h2>
       <div className="space-y-2">
         {revisions.map((rev) => (
           <div
@@ -75,13 +85,17 @@ export function DraftRevisionHistory({ draftId, currentVersion }: DraftRevisionH
           >
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium text-zinc-700">
-                Version {rev.version}
+                {t('drafts.revisions.version', { version: rev.version })}
                 {rev.version === currentVersion && (
-                  <span className="ml-2 text-xs text-blue-600">(current)</span>
+                  <span className="ml-2 text-xs text-blue-600">
+                    {t('drafts.revisions.current')}
+                  </span>
                 )}
               </span>
               <span className="text-xs text-zinc-400">
-                {rev.created_by_type === 'user' ? 'Edited by user' : 'AI generated'}
+                {rev.created_by_type === 'user'
+                  ? t('drafts.revisions.byUser')
+                  : t('drafts.revisions.byAi')}
               </span>
             </div>
             <p className="mt-1 text-sm text-zinc-600">
@@ -89,7 +103,7 @@ export function DraftRevisionHistory({ draftId, currentVersion }: DraftRevisionH
               {rev.body.length > 200 ? '...' : ''}
             </p>
             <p className="mt-1 text-xs text-zinc-400">
-              {new Date(rev.created_at).toLocaleString()}
+              {formatDateTime(rev.created_at, t.locale)}
             </p>
           </div>
         ))}

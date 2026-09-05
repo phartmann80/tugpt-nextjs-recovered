@@ -24,22 +24,54 @@ describe('Next.js 16 Proxy Route Classifier', () => {
   it('classifies /auth paths as auth routes', () => {
     expect(classifyRoute('/auth/login')).toBe('auth');
     expect(classifyRoute('/auth/callback')).toBe('auth');
+    expect(classifyRoute('/auth/logout')).toBe('auth');
     expect(classifyRoute('/api/v1/auth/session')).toBe('auth');
   });
 
-  it('classifies protected application paths as protected routes', () => {
+  it('classifies application pages as protected routes', () => {
     expect(classifyRoute('/dashboard')).toBe('protected');
-    expect(classifyRoute('/dashboard/analytics')).toBe('protected');
+    expect(classifyRoute('/dashboard/drafts')).toBe('protected');
+    expect(classifyRoute('/dashboard/drafts/[draftId]')).toBe('protected');
     expect(classifyRoute('/settings')).toBe('protected');
     expect(classifyRoute('/crm')).toBe('protected');
     expect(classifyRoute('/organizations')).toBe('protected');
   });
 
-  it('classifies public paths as public routes', () => {
+  it('classifies only the enumerated exceptions as public', () => {
     expect(classifyRoute('/')).toBe('public');
-    expect(classifyRoute('/about')).toBe('public');
-    expect(classifyRoute('/pricing')).toBe('public');
     expect(classifyRoute('/api/v1/health')).toBe('public');
+    expect(classifyRoute('/api/v1/webhooks/whatsapp')).toBe('public');
+    expect(classifyRoute('/api/v1/organizations')).toBe('public');
+    expect(classifyRoute('/api/v1/drafts')).toBe('public');
+    expect(classifyRoute('/api/v1/drafts/abc-123')).toBe('public');
+    expect(classifyRoute('/api/v1/drafts/abc-123/approve')).toBe('public');
+  });
+
+  /**
+   * The reason this change exists. classifyRoute used to be an allowlist of
+   * protected prefixes with a `public` fallback, so a page added at a path
+   * nobody remembered to list was served with no authentication check at all.
+   * `/about` and `/pricing` were asserted to be public by the previous version
+   * of this test — which documented the hole rather than closing it.
+   */
+  it('treats an unlisted path as protected, not public', () => {
+    expect(classifyRoute('/about')).toBe('protected');
+    expect(classifyRoute('/pricing')).toBe('protected');
+    expect(classifyRoute('/reports')).toBe('protected');
+    expect(classifyRoute('/admin/users')).toBe('protected');
+    expect(classifyRoute('/api/v1/anything-new')).toBe('protected');
+  });
+
+  /**
+   * Prefix matching is a segment boundary, not `startsWith`. The old classifier
+   * would have called `/authorize-payments` an auth route.
+   */
+  it('matches prefixes on segment boundaries only', () => {
+    expect(classifyRoute('/authorize-payments')).toBe('protected');
+    expect(classifyRoute('/authx')).toBe('protected');
+    expect(classifyRoute('/api/v1/draftsomething')).toBe('protected');
+    expect(classifyRoute('/api/v1/organizations-export')).toBe('protected');
+    expect(classifyRoute('/api/v1/webhooksomething')).toBe('protected');
   });
 });
 
@@ -50,7 +82,7 @@ describe('Next.js 16 Proxy Execution', () => {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'test-anon-key';
   });
 
-  it('redirects unauthenticated users from protected routes to login', async () => {
+  it('redirects unauthenticated users from protected pages to login', async () => {
     mockGetClaims.mockResolvedValueOnce({ data: null, error: { message: 'no session' } });
 
     const req = new NextRequest('http://localhost/dashboard');
@@ -60,10 +92,27 @@ describe('Next.js 16 Proxy Execution', () => {
     expect(res.headers.get('location')).toBe('http://localhost/auth/login?redirect=%2Fdashboard');
   });
 
+  /**
+   * A `fetch()` for JSON must not be answered with a redirect to an HTML login
+   * page: following it yields a 200 with a `<!DOCTYPE html>` body, so the
+   * caller's `res.json()` throws a parse error instead of seeing the 401 that
+   * actually happened.
+   */
+  it('answers an unauthenticated API request with 401 JSON, not a redirect', async () => {
+    mockGetClaims.mockResolvedValueOnce({ data: null, error: { message: 'no session' } });
+
+    const req = new NextRequest('http://localhost/api/v1/anything-new');
+    const res = await proxy(req);
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('location')).toBeNull();
+    await expect(res.json()).resolves.toEqual({ error: 'Unauthenticated' });
+  });
+
   it('allows authenticated users with valid claims to access protected routes', async () => {
     mockGetClaims.mockResolvedValueOnce({
       data: {
-        claims: { sub: 'user-1', email: 'test@test.com', aud: 'authenticated' },
+        claims: { sub: 'user-1', email: 'test@example.com', aud: 'authenticated' },
         header: {},
         signature: new Uint8Array(),
       },
@@ -76,6 +125,33 @@ describe('Next.js 16 Proxy Execution', () => {
 
     expect(res.status).toBe(200);
     expect(res.headers.get('x-request-id')).toMatch(/^req-/);
+  });
+
+  /**
+   * The container healthcheck in docker-compose.yml polls this with no
+   * credentials, and `wget` follows redirects — so if this ever became
+   * protected, the healthcheck would follow the 307 to the login page, get a
+   * 200, and report a dead app as healthy. It must stay reachable, and the
+   * session check must not run for it.
+   */
+  it('serves the liveness probe without consulting the session', async () => {
+    const req = new NextRequest('http://localhost/api/v1/health');
+    const res = await proxy(req);
+
+    expect(res.status).toBe(200);
+    expect(mockGetClaims).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Meta calls this unauthenticated. If the proxy ever gated it, every inbound
+   * webhook would be answered with a redirect and no message would arrive.
+   */
+  it('leaves the WhatsApp webhook path to its own HMAC check', async () => {
+    const req = new NextRequest('http://localhost/api/v1/webhooks/whatsapp', { method: 'POST' });
+    const res = await proxy(req);
+
+    expect(res.status).toBe(200);
+    expect(mockGetClaims).not.toHaveBeenCalled();
   });
 
   it('injects x-request-id and propagates x-tenant-id header when cookie is present', async () => {
@@ -104,5 +180,26 @@ describe('Next.js 16 Proxy Execution', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('x-request-id')).toBe('custom-req-id-789');
     expect(res.headers.get('x-tenant-id')).toBe('org-uuid-789');
+  });
+
+  /**
+   * A web image built without the NEXT_PUBLIC_* build args has no Supabase
+   * config at all. That used to bounce every dashboard request to the login
+   * page forever, which reads like an authentication bug rather than a build
+   * one. It still refuses — but an API caller now gets a 401 it can act on.
+   */
+  it('refuses protected routes when Supabase env is missing, in the caller\'s own shape', async () => {
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    const page = await proxy(new NextRequest('http://localhost/dashboard'));
+    expect(page.status).toBe(307);
+    expect(page.headers.get('location')).toBe('http://localhost/auth/login?redirect=%2Fdashboard');
+
+    const api = await proxy(new NextRequest('http://localhost/api/v1/anything-new'));
+    expect(api.status).toBe(401);
+    await expect(api.json()).resolves.toEqual({ error: 'Unauthenticated' });
+
+    expect(mockGetClaims).not.toHaveBeenCalled();
   });
 });

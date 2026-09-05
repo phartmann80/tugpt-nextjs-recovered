@@ -80,7 +80,7 @@ function makeParams(draftId: string) {
 
 // Set up default successful auth + feature gate
 function setupSuccessAuth() {
-  mockGetCurrentUser.mockResolvedValue({ id: 'user-1', email: 'test@test.com' });
+  mockGetCurrentUser.mockResolvedValue({ id: 'user-1', email: 'test@example.com' });
   mockResolveTenantContext.mockResolvedValue({
     organizationId: 'org-1',
     organizationName: 'Test Org',

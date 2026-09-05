@@ -1,6 +1,6 @@
 /**
  * @file errors.ts
- * @description Structured provider error types for TuGPT.ai.
+ * @description Structured provider error types for TuGPT.
  *
  * These errors carry a normalized category, HTTP status (when applicable),
  * and provider name. They never carry credentials, prompts, or customer

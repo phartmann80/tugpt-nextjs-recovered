@@ -5,12 +5,25 @@ import type { TypedSupabaseClient } from '@tugpt/database';
 function createMockSupabase(memberships: Array<{
   organization_id: string;
   role: 'owner' | 'admin' | 'manager' | 'agent' | 'viewer';
-  organizations: { id: string; name: string; deleted_at: string | null } | null;
+  // `locale` is optional here on purpose: most of these fixtures do not care
+  // about it, and a row that omits it exercises the same coercion path as a row
+  // holding something the CHECK constraint should have refused.
+  organizations: {
+    id: string;
+    name: string;
+    locale?: unknown;
+    deleted_at: string | null;
+  } | null;
 }>) {
+  const memberSelect = vi.fn().mockReturnThis();
+
   return {
+    // Exposed so a test can assert what the membership query asks PostgREST
+    // for. See "asks the database for the locale column".
+    __memberSelect: memberSelect,
     auth: {
       getUser: vi.fn().mockResolvedValue({
-        data: { user: { id: 'user-1', email: 'user@tugpt.ai', user_metadata: {} } },
+        data: { user: { id: 'user-1', email: 'user@example.com', user_metadata: {} } },
         error: null,
       }),
       signInWithOAuth: vi.fn(),
@@ -24,7 +37,7 @@ function createMockSupabase(memberships: Array<{
     from: vi.fn().mockImplementation((table: string) => {
       if (table === 'organization_members') {
         return {
-          select: vi.fn().mockReturnThis(),
+          select: memberSelect,
           eq: vi.fn().mockResolvedValue({
             data: memberships,
             error: null,
@@ -38,7 +51,7 @@ function createMockSupabase(memberships: Array<{
           single: vi.fn().mockResolvedValue({
             data: {
               id: 'user-1',
-              email: 'user@tugpt.ai',
+              email: 'user@example.com',
               full_name: 'Test User',
               avatar_url: null,
             },
@@ -143,5 +156,68 @@ describe('AuthService Multi-Tenant Context Resolution', () => {
     const tenant = await service.resolveTenantContext('user-1');
 
     expect(tenant).toBeNull();
+  });
+});
+
+describe('AuthService locale resolution', () => {
+  it('carries the organization locale into the tenant context', async () => {
+    // The dashboard's language comes from here (ADR-017). It rides on the
+    // membership row that already had to be read to answer "which organization
+    // is this?", so there is one answer rather than two that can disagree.
+    const supabase = createMockSupabase([
+      {
+        organization_id: 'org-en',
+        role: 'owner',
+        organizations: { id: 'org-en', name: 'English Org', locale: 'en', deleted_at: null },
+      },
+    ]);
+    const service = new AuthService(supabase);
+
+    const tenant = await service.resolveTenantContext('user-1');
+
+    expect(tenant?.locale).toBe('en');
+  });
+
+  it('falls back to Spanish for a locale the dashboard cannot render', async () => {
+    // The constraint added in 20260830000001 should make this unreachable. It is
+    // tested because the alternative at this boundary is a layout rendering
+    // `undefined`, and Spanish is a complete answer for every organization that
+    // exists.
+    const supabase = createMockSupabase([
+      {
+        organization_id: 'org-odd',
+        role: 'owner',
+        organizations: { id: 'org-odd', name: 'Odd Org', locale: 'pt-BR', deleted_at: null },
+      },
+    ]);
+    const service = new AuthService(supabase);
+
+    expect((await service.resolveTenantContext('user-1'))?.locale).toBe('es');
+  });
+
+  it('asks the database for the locale column', async () => {
+    // The one mutation this suite could not otherwise catch. Dropping `locale`
+    // from the select makes every organization render Spanish — which is the
+    // default, so nothing looks wrong, in staging or in production, until an
+    // English customer says the dashboard ignores their setting.
+    const supabase = createMockSupabase([]);
+    await new AuthService(supabase).getUserOrganizations('user-1');
+
+    const select = (supabase as unknown as { __memberSelect: { mock: { calls: string[][] } } })
+      .__memberSelect;
+    expect(select.mock.calls[0][0]).toContain('locale');
+  });
+
+  it('falls back to Spanish when the column is absent from the row', async () => {
+    const supabase = createMockSupabase([
+      {
+        organization_id: 'org-old',
+        role: 'owner',
+        organizations: { id: 'org-old', name: 'Old Org', deleted_at: null },
+      },
+    ]);
+    const service = new AuthService(supabase);
+
+    expect((await service.resolveTenantContext('user-1'))?.locale).toBe('es');
   });
 });

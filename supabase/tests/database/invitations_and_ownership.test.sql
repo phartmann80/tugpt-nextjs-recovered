@@ -1,4 +1,4 @@
--- TuGPT.ai pgTAP Invitations and Organization Ownership Test Suite
+-- TuGPT pgTAP Invitations and Organization Ownership Test Suite
 -- Runs inside a single transaction that is rolled back at the end.
 
 BEGIN;
@@ -10,14 +10,14 @@ SELECT plan(10);
 
 -- Seed Users in auth.users
 INSERT INTO auth.users (id, email, raw_user_meta_data) VALUES
-  ('11111111-1111-1111-1111-111111111111', 'owner_a@tugpt.ai', '{"full_name": "Owner A"}'),
-  ('22222222-2222-2222-2222-222222222222', 'admin_b@tugpt.ai', '{"full_name": "Admin B"}'),
-  ('33333333-3333-3333-3333-333333333333', 'invitee_c@tugpt.ai', '{"full_name": "Invitee C"}'),
-  ('44444444-4444-4444-4444-444444444444', 'rollback_d@tugpt.ai', '{"full_name": "Rollback D"}')
+  ('11111111-1111-1111-1111-111111111111', 'owner_a@example.com', '{"full_name": "Owner A"}'),
+  ('22222222-2222-2222-2222-222222222222', 'admin_b@example.com', '{"full_name": "Admin B"}'),
+  ('33333333-3333-3333-3333-333333333333', 'invitee_c@example.com', '{"full_name": "Invitee C"}'),
+  ('44444444-4444-4444-4444-444444444444', 'rollback_d@example.com', '{"full_name": "Rollback D"}')
 ON CONFLICT (id) DO NOTHING;
 
 -- Seed Profiles
--- User D ('rollback_d@tugpt.ai') is seeded as a profile only and is
+-- User D ('rollback_d@example.com') is seeded as a profile only and is
 -- deliberately NOT added to organization_members below. Test 7 needs a
 -- user who genuinely has no membership row before the test runs, so the
 -- rollback assertion (Test 7b) proves the earlier INSERT was undone rather
@@ -25,10 +25,10 @@ ON CONFLICT (id) DO NOTHING;
 -- already has real membership from Test 3's accept_invitation() call,
 -- which made it unsuitable as the Test 7 fixture).
 INSERT INTO public.profiles (id, email, full_name) VALUES
-  ('11111111-1111-1111-1111-111111111111', 'owner_a@tugpt.ai', 'Owner A'),
-  ('22222222-2222-2222-2222-222222222222', 'admin_b@tugpt.ai', 'Admin B'),
-  ('33333333-3333-3333-3333-333333333333', 'invitee_c@tugpt.ai', 'Invitee C'),
-  ('44444444-4444-4444-4444-444444444444', 'rollback_d@tugpt.ai', 'Rollback D')
+  ('11111111-1111-1111-1111-111111111111', 'owner_a@example.com', 'Owner A'),
+  ('22222222-2222-2222-2222-222222222222', 'admin_b@example.com', 'Admin B'),
+  ('33333333-3333-3333-3333-333333333333', 'invitee_c@example.com', 'Invitee C'),
+  ('44444444-4444-4444-4444-444444444444', 'rollback_d@example.com', 'Rollback D')
 ON CONFLICT (id) DO NOTHING;
 
 -- Seed Organizations
@@ -46,26 +46,26 @@ ON CONFLICT (organization_id, user_id) DO NOTHING;
 -- =============================================================================
 -- TEST 1: Wrong email rejection
 -- =============================================================================
--- Seed an invitation for wrong_user@tugpt.ai
+-- Seed an invitation for wrong_user@example.com
 INSERT INTO public.organization_invitations (id, organization_id, email, role, token_hash, invited_by, expires_at)
 VALUES (
   'e1e1e1e1-e1e1-e1e1-e1e1-e1e1e1e1e1e1',
   'd1d1d1d1-d1d1-d1d1-d1d1-d1d1d1d1d1d1',
-  'wrong_user@tugpt.ai',
+  'wrong_user@example.com',
   'agent',
-  'tok_wrong_email_123',
+  private.hash_invitation_token('tok_wrong_email_123'),
   '11111111-1111-1111-1111-111111111111',
   NOW() + INTERVAL '1 day'
 );
 
--- Try to accept with token as User C ('invitee_c@tugpt.ai')
+-- Try to accept with token as User C ('invitee_c@example.com')
 SELECT set_config('request.jwt.claims', '{"sub":"33333333-3333-3333-3333-333333333333","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 
 SELECT throws_ok(
-  $$SELECT public.accept_invitation('tok_wrong_email_123', '33333333-3333-3333-3333-333333333333')$$,
-  'P0001',
-  'Invitation email identity mismatch',
+  $$SELECT public.accept_invitation('tok_wrong_email_123')$$,
+  'P3D06',
+  'Invitation was issued to a different address',
   'Test 1: Rejects accepting an invitation where email identity does not match'
 );
 
@@ -74,24 +74,28 @@ SELECT throws_ok(
 -- TEST 2: Expired invitation rejection
 -- =============================================================================
 SET LOCAL ROLE postgres;
-INSERT INTO public.organization_invitations (id, organization_id, email, role, token_hash, invited_by, expires_at)
+INSERT INTO public.organization_invitations (id, organization_id, email, role, token_hash, invited_by, expires_at, created_at)
 VALUES (
   'e2e2e2e2-e2e2-e2e2-e2e2-e2e2e2e2e2e2',
   'd1d1d1d1-d1d1-d1d1-d1d1-d1d1d1d1d1d1',
-  'invitee_c@tugpt.ai',
+  'invitee_c@example.com',
   'agent',
-  'tok_expired_123',
+  private.hash_invitation_token('tok_expired_123'),
   '11111111-1111-1111-1111-111111111111',
-  NOW() - INTERVAL '1 hour'
+  NOW() - INTERVAL '1 hour',
+  -- created_at is backdated too: organization_invitations_expiry_bounded
+  -- (20260902000001) requires expires_at > created_at, and this fixture is
+  -- deliberately already expired.
+  NOW() - INTERVAL '2 days'
 );
 
 SELECT set_config('request.jwt.claims', '{"sub":"33333333-3333-3333-3333-333333333333","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 
 SELECT throws_ok(
-  $$SELECT public.accept_invitation('tok_expired_123', '33333333-3333-3333-3333-333333333333')$$,
-  'P0001',
-  'Invitation token has expired',
+  $$SELECT public.accept_invitation('tok_expired_123')$$,
+  'P3D05',
+  'Invitation has expired',
   'Test 2: Rejects accepting an expired invitation token'
 );
 
@@ -100,13 +104,24 @@ SELECT throws_ok(
 -- TEST 3: Replay prevention (cannot accept twice)
 -- =============================================================================
 SET LOCAL ROLE postgres;
+
+-- Retire Test 2's lapsed invitation before seeding another for the same
+-- address. `idx_org_invitations_one_pending_per_email` (20260902000001) allows
+-- one pending invitation per address per organization, and Test 2's row is
+-- still pending: accept_invitation cannot mark it expired, because the RAISE
+-- that follows would roll the mark back. In production create_invitation
+-- sweeps it on the way past; these fixtures insert directly, so the sweep is
+-- done by hand here.
+UPDATE public.organization_invitations
+SET status = 'expired'
+WHERE id = 'e2e2e2e2-e2e2-e2e2-e2e2-e2e2e2e2e2e2';
 INSERT INTO public.organization_invitations (id, organization_id, email, role, token_hash, invited_by, expires_at)
 VALUES (
   'e3e3e3e3-e3e3-e3e3-e3e3-e3e3e3e3e3e3',
   'd1d1d1d1-d1d1-d1d1-d1d1-d1d1d1d1d1d1',
-  'invitee_c@tugpt.ai',
+  'invitee_c@example.com',
   'agent',
-  'tok_valid_123',
+  private.hash_invitation_token('tok_valid_123'),
   '11111111-1111-1111-1111-111111111111',
   NOW() + INTERVAL '1 day'
 );
@@ -116,15 +131,15 @@ SELECT set_config('request.jwt.claims', '{"sub":"33333333-3333-3333-3333-3333333
 SET LOCAL ROLE authenticated;
 
 SELECT is(
-  (SELECT public.accept_invitation('tok_valid_123', '33333333-3333-3333-3333-333333333333')),
+  (SELECT (public.accept_invitation('tok_valid_123') ->> 'membership_created')::boolean),
   true,
-  'Test 3a: Successfully accepts valid invitation'
+  'Test 3a: Successfully accepts valid invitation and creates the membership'
 );
 
 -- Try to accept again (replay)
 SELECT throws_ok(
-  $$SELECT public.accept_invitation('tok_valid_123', '33333333-3333-3333-3333-333333333333')$$,
-  'P0001',
+  $$SELECT public.accept_invitation('tok_valid_123')$$,
+  'P3D04',
   'Invitation is no longer pending',
   'Test 3b: Blocks accepting the invitation a second time'
 );
@@ -259,4 +274,8 @@ SELECT is(
 -- CLEANUP: rollback at end of file (handled by ROLLBACK at end of test run)
 -- =============================================================================
 
+-- finish() emits the plan-versus-ran diagnostic. Added 2026-08-20: without it
+-- a file that stops early (an exception aborting the transaction, say) still
+-- looks like a clean run to pg_prove.
+SELECT * FROM finish();
 ROLLBACK;

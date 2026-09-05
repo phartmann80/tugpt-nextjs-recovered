@@ -259,6 +259,69 @@ async function assertOrgIsSynthetic(ctx: Ctx, orgId: string): Promise<void> {
 
 // --- commands -------------------------------------------------------------
 
+/**
+ * Report how old the FX rate is. WARNS, never fails.
+ *
+ * The 2026-09-03 decision was that a stale rate warns rather than blocking:
+ * an old official rate beats refusing enforcement, and because the rate and
+ * its date are stored on every converted row, staleness can move an
+ * enforcement decision but never corrupt a recorded total.
+ *
+ * That decision only holds if somebody sees the warning. `RAISE WARNING` in
+ * the database lands in a worker log nobody reads on purpose, so the signal is
+ * surfaced here instead — every deploy runs preflight, which means the rate's
+ * age is reported without anyone remembering to look. The thing being watched
+ * for is precisely somebody forgetting.
+ *
+ * The threshold lives in the database (`private.fx_rate_max_age_days`) and is
+ * read through `public.fx_rate_status`, rather than being a second `45` in
+ * this file that could drift away from it.
+ *
+ * Never calls fail(). A missing rate, an unreadable one, or an ancient one are
+ * all reasons to tell somebody, and none of them is a reason to stop a deploy
+ * that is otherwise fine.
+ */
+async function reportFxRateAge(ctx: Ctx): Promise<void> {
+  const { data, error } = await ctx.admin.rpc('fx_rate_status');
+
+  if (error) {
+    warn(
+      `Could not read FX rate status: ${error.message}. ` +
+        'Provider cost in a non-accounting currency may be unconvertible; this does not block the deploy.'
+    );
+    return;
+  }
+
+  const rows = (data ?? []) as Array<{
+    base_currency: string;
+    quote_currency: string;
+    rate_date: string;
+    age_days: number;
+    is_stale: boolean;
+  }>;
+
+  if (rows.length === 0) {
+    info(
+      'No FX rates configured. Spend in a currency other than the accounting ' +
+        'currency records unpriced-in-accounting-terms and the cost meter will refuse it.'
+    );
+    return;
+  }
+
+  for (const r of rows) {
+    const pair = `${r.base_currency}->${r.quote_currency}`;
+    const detail = `${pair} rate is from ${r.rate_date} (${r.age_days} days old)`;
+    if (r.is_stale) {
+      warn(
+        `${detail} — past the freshness threshold. Refresh it from the ECB daily ` +
+          'reference rate. Conversion continues at the old rate; this does not block the deploy.'
+      );
+    } else {
+      ok(detail);
+    }
+  }
+}
+
 async function cmdPreflight(ctx: Ctx): Promise<void> {
   step('PREFLIGHT');
   info(`Supabase URL: ${ctx.env.supabaseUrl}`);
@@ -275,6 +338,10 @@ async function cmdPreflight(ctx: Ctx): Promise<void> {
   // that must be verified before anything else is that this run cannot reach a
   // real customer. Everything below is read-only.
   await assertSchemaUpToDate(ctx);
+
+  // After the schema check: a stale schema is the more urgent thing to say,
+  // and this one is advisory by design.
+  await reportFxRateAge(ctx);
 
   const { data: flags, error: flagError } = await ctx.admin
     .from('feature_flags')
@@ -721,13 +788,15 @@ async function cmdWait(ctx: Ctx, providerMessageId: string, timeoutMs: number): 
   if (!messageId) {
     fail(
       `Timed out: the whatsapp worker never turned the queued event into a message row. ` +
-        `Check that tugpt-whatsapp-worker is running: systemctl status tugpt-whatsapp-worker`
+        `Check the whatsapp-worker container is running: ` +
+        `cd /opt/tugpt && docker compose -p tugpt ps whatsapp-worker`
     );
   }
   fail(
     `Timed out waiting for the draft. The message was processed but no draft completed. ` +
-      `Check that tugpt-draft-worker is running and has LANGDOCK_API_CODE: ` +
-      `systemctl status tugpt-draft-worker && journalctl -u tugpt-draft-worker -n 100`
+      `Check the draft-worker container is running and has LANGDOCK_API_CODE: ` +
+      `cd /opt/tugpt && docker compose -p tugpt ps draft-worker ` +
+      `&& docker compose -p tugpt logs --tail=100 draft-worker`
   );
 }
 

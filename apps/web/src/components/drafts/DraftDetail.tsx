@@ -9,11 +9,16 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import type { DraftDetail as DraftDetailType, ApiError } from '@/lib/draft-api/types';
+import { apiErrorText } from '@/lib/draft-api/error-text';
+import { formatDateTime } from '@/i18n';
+import { useT } from '@/i18n/provider';
 import { DraftActions } from './DraftActions';
 import { DraftRevisionHistory } from './DraftRevisionHistory';
 import { DraftEventHistory } from './DraftEventHistory';
+import { ConversationThread } from './ConversationThread';
 
 export function DraftDetail({ draftId }: { draftId: string }) {
+  const t = useT();
   const [draft, setDraft] = useState<DraftDetailType | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -59,7 +64,7 @@ export function DraftDetail({ draftId }: { draftId: string }) {
         }
 
         if (res.status === 401) {
-          setError('Authentication required');
+          setError(t('errors.UNAUTHENTICATED'));
           setLoading(false);
           return;
         }
@@ -67,7 +72,7 @@ export function DraftDetail({ draftId }: { draftId: string }) {
         if (!res.ok) {
           const data: ApiError = await res.json();
           if (cancelled) return;
-          setError(data.error?.message || 'Failed to load draft');
+          setError(apiErrorText(t, data));
           setLoading(false);
           return;
         }
@@ -80,7 +85,7 @@ export function DraftDetail({ draftId }: { draftId: string }) {
         setFeatureUnavailable(false);
         setStaleVersion(false);
       } catch {
-        if (!cancelled) setError('Failed to load draft');
+        if (!cancelled) setError(t('drafts.detail.loadFailed'));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -89,12 +94,12 @@ export function DraftDetail({ draftId }: { draftId: string }) {
     load();
 
     return () => { cancelled = true; };
-  }, [draftId, reloadKey]);
+  }, [draftId, reloadKey, t]);
 
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <p className="text-zinc-500">Loading draft...</p>
+        <p className="text-zinc-500">{t('drafts.detail.loading')}</p>
       </div>
     );
   }
@@ -103,7 +108,7 @@ export function DraftDetail({ draftId }: { draftId: string }) {
     return (
       <div className="flex flex-col items-center justify-center py-20">
         <p className="text-lg font-medium text-zinc-700">
-          AI Draft Generation is not currently available for your organization.
+          {t('drafts.detail.featureUnavailable')}
         </p>
       </div>
     );
@@ -112,12 +117,12 @@ export function DraftDetail({ draftId }: { draftId: string }) {
   if (notFound) {
     return (
       <div className="flex flex-col items-center justify-center py-20">
-        <p className="text-zinc-600">Draft not found.</p>
+        <p className="text-zinc-600">{t('drafts.detail.notFound')}</p>
         <Link
           href="/dashboard/drafts"
           className="mt-4 text-sm font-medium text-blue-600 hover:underline"
         >
-          Back to inbox
+          {t('drafts.detail.backToInbox')}
         </Link>
       </div>
     );
@@ -131,7 +136,7 @@ export function DraftDetail({ draftId }: { draftId: string }) {
           onClick={() => setReloadKey((k) => k + 1)}
           className="mt-4 rounded bg-zinc-800 px-4 py-2 text-white hover:bg-zinc-700"
         >
-          Retry
+          {t('common.retry')}
         </button>
       </div>
     );
@@ -145,81 +150,96 @@ export function DraftDetail({ draftId }: { draftId: string }) {
         href="/dashboard/drafts"
         className="mb-4 inline-block text-sm text-blue-600 hover:underline"
       >
-        &larr; Back to inbox
+        &larr; {t('drafts.detail.backToInbox')}
       </Link>
 
       {/* Stale version conflict */}
       {staleVersion && (
         <div className="mb-4 rounded-lg border border-orange-300 bg-orange-50 p-4">
-          <p className="text-orange-800">
-            This draft has been modified by another reviewer. Please reload.
-          </p>
+          <p className="text-orange-800">{t('drafts.detail.stale')}</p>
           <button
             onClick={() => setReloadKey((k) => k + 1)}
             className="mt-2 rounded bg-orange-600 px-4 py-2 text-sm text-white hover:bg-orange-700"
           >
-            Reload
+            {t('common.reload')}
           </button>
         </div>
       )}
 
       {/* Draft header */}
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-zinc-900">Draft Review</h1>
+        <h1 className="text-2xl font-bold text-zinc-900">{t('drafts.detail.title')}</h1>
         <StatusBadge status={draft.status} />
       </div>
 
       {/* Draft metadata */}
       <div className="mb-6 grid grid-cols-2 gap-4 text-sm text-zinc-600">
-        <div>Version: {draft.version}</div>
-        {draft.provider && <div>Provider: {draft.provider}</div>}
-        {draft.model && <div>Model: {draft.model}</div>}
-        <div>Created: {new Date(draft.created_at).toLocaleString()}</div>
-        <div>Updated: {new Date(draft.updated_at).toLocaleString()}</div>
+        <div>{t('drafts.detail.version', { version: draft.version })}</div>
+        {draft.provider && <div>{t('drafts.detail.provider', { provider: draft.provider })}</div>}
+        {draft.model && <div>{t('drafts.detail.model', { model: draft.model })}</div>}
+        <div>{t('drafts.detail.created', { at: formatDateTime(draft.created_at, t.locale) })}</div>
+        <div>{t('drafts.detail.updated', { at: formatDateTime(draft.updated_at, t.locale) })}</div>
         {draft.reviewed_at && (
-          <div>Reviewed: {new Date(draft.reviewed_at).toLocaleString()}</div>
+          <div>{t('drafts.detail.reviewed', { at: formatDateTime(draft.reviewed_at, t.locale) })}</div>
         )}
         {draft.rejected_at && (
-          <div>Rejected: {new Date(draft.rejected_at).toLocaleString()}</div>
+          <div>{t('drafts.detail.rejected', { at: formatDateTime(draft.rejected_at, t.locale) })}</div>
         )}
       </div>
 
       {/* Draft body */}
       <div className="mb-6">
-        <h2 className="mb-2 text-lg font-semibold text-zinc-800">Draft Content</h2>
+        <h2 className="mb-2 text-lg font-semibold text-zinc-800">
+          {t('drafts.detail.contentHeading')}
+        </h2>
         <pre className="whitespace-pre-wrap rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-800">
-          {draft.current_revision_body || 'No content available'}
+          {draft.current_revision_body || t('drafts.detail.noContent')}
         </pre>
       </div>
 
       {/* Source message context */}
       {draft.source_message && (
         <div className="mb-6">
-          <h2 className="mb-2 text-lg font-semibold text-zinc-800">Source Message</h2>
+          <h2 className="mb-2 text-lg font-semibold text-zinc-800">
+            {t('drafts.detail.sourceHeading')}
+          </h2>
           <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-4">
             <p className="text-sm text-zinc-700">
-              {draft.source_message.body || 'No message body'}
+              {draft.source_message.body || t('drafts.detail.noSourceBody')}
             </p>
             <div className="mt-2 flex gap-4 text-xs text-zinc-400">
-              <span>Direction: {draft.source_message.direction}</span>
-              <span>Received: {new Date(draft.source_message.created_at).toLocaleString()}</span>
+              <span>
+                {t('drafts.detail.direction', {
+                  direction: t(`drafts.direction.${draft.source_message.direction}`),
+                })}
+              </span>
+              <span>
+                {t('drafts.detail.received', {
+                  at: formatDateTime(draft.source_message.created_at, t.locale),
+                })}
+              </span>
               {draft.source_message.contact_display && (
-                <span>From: {draft.source_message.contact_display}</span>
+                <span>
+                  {t('drafts.detail.from', { contact: draft.source_message.contact_display })}
+                </span>
               )}
             </div>
           </div>
         </div>
       )}
 
-      {/* Conversation context */}
-      {draft.conversation && (
-        <div className="mb-6">
-          <h2 className="mb-2 text-lg font-semibold text-zinc-800">Conversation</h2>
-          <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-600">
-            <span>Status: {draft.conversation.status}</span>
-          </div>
-        </div>
-      )}
+      {/*
+        The conversation, as a thread rather than a status line.
+
+        This block used to render one field — the conversation's status — under
+        a heading called "Conversation". A reviewer approving a reply on behalf
+        of a business had the AI's guess and the single message it answered, and
+        nothing to judge either against: not whether the customer had asked the
+        same thing twice, not whether the shop had already replied an hour ago.
+        The thread is the Sep 18 milestone and it carries the status in its own
+        header, so nothing is lost by replacing this.
+      */}
+      {draft.conversation && <ConversationThread draftId={draft.id} />}
 
       {/* Action buttons — only for draft status, not terminal */}
       {draft.status === 'draft' && (
@@ -241,15 +261,16 @@ export function DraftDetail({ draftId }: { draftId: string }) {
   );
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
+function StatusBadge({ status }: { status: DraftDetailType['status'] }) {
+  const t = useT();
+  const styles: Record<DraftDetailType['status'], string> = {
     draft: 'bg-yellow-100 text-yellow-800',
     approved: 'bg-green-100 text-green-800',
     rejected: 'bg-red-100 text-red-800',
   };
   return (
-    <span className={`rounded-full px-3 py-1 text-sm font-medium ${styles[status] || 'bg-zinc-100 text-zinc-700'}`}>
-      {status.charAt(0).toUpperCase() + status.slice(1)}
+    <span className={`rounded-full px-3 py-1 text-sm font-medium ${styles[status]}`}>
+      {t(`drafts.status.${status}`)}
     </span>
   );
 }

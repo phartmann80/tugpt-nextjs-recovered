@@ -6,8 +6,10 @@
 import { Suspense, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getBrowserClient } from '@/lib/supabase/browser';
+import { useT } from '@/i18n/provider';
 
 function CallbackHandler() {
+  const t = useT();
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -34,20 +36,23 @@ function CallbackHandler() {
 
   return (
     <div className="flex min-h-screen items-center justify-center">
-      <p className="text-zinc-500">Completing authentication...</p>
+      <p className="text-zinc-500">{t('auth.callback.pending')}</p>
+    </div>
+  );
+}
+
+function CallbackFallback() {
+  const t = useT();
+  return (
+    <div className="flex min-h-screen items-center justify-center">
+      <p className="text-zinc-500">{t('common.loading')}</p>
     </div>
   );
 }
 
 export default function AuthCallbackPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="flex min-h-screen items-center justify-center">
-          <p className="text-zinc-500">Loading...</p>
-        </div>
-      }
-    >
+    <Suspense fallback={<CallbackFallback />}>
       <CallbackHandler />
     </Suspense>
   );

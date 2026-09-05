@@ -17,12 +17,22 @@
  * touches the UI.
  *
  * So these tests render the components and drive them the way a reviewer does.
+ *
+ * 2026-08-30: the UI renders Spanish (ADR-017), so the queries go through the
+ * dictionary rather than through Spanish literals. What is worth asserting is
+ * that a component reaches for the right KEY — a literal here would fail on
+ * every copy edit while telling you nothing about whether the UI is wired up.
+ * The components render without an I18nProvider and get the default Spanish
+ * translator, which is the same one this file builds.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DraftDetail } from './DraftDetail';
 import { DraftActions } from './DraftActions';
+import { createTranslator } from '@/i18n';
+
+const t = createTranslator('es');
 
 vi.mock('next/link', () => ({
   default: ({ children, href }: { children: React.ReactNode; href: string }) => (
@@ -70,7 +80,7 @@ const textareaValue = (): string => (screen.getByRole('textbox') as HTMLTextArea
 async function renderDetail(payload = draftPayload()) {
   mockFetch.mockResolvedValueOnce(jsonOk(payload));
   render(<DraftDetail draftId={DRAFT_ID} />);
-  await screen.findByText('Draft Review');
+  await screen.findByText(t('drafts.detail.title'));
 }
 
 /** The JSON body of the request sent to a given endpoint suffix. */
@@ -95,7 +105,7 @@ describe('editing a draft', () => {
     const user = userEvent.setup();
     await renderDetail();
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: t('drafts.actions.edit') }));
 
     expect(textareaValue()).toBe(DRAFT_BODY);
   });
@@ -104,13 +114,13 @@ describe('editing a draft', () => {
     const user = userEvent.setup();
     await renderDetail();
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: t('drafts.actions.edit') }));
     await user.clear(screen.getByRole('textbox'));
     await user.type(screen.getByRole('textbox'), 'Rewritten by the reviewer.');
 
     mockFetch.mockResolvedValueOnce(jsonOk({ draft: { version: 4 } }));
     mockFetch.mockResolvedValueOnce(jsonOk(draftPayload({ version: 4 })));
-    await user.click(screen.getByRole('button', { name: 'Save Edit' }));
+    await user.click(screen.getByRole('button', { name: t('drafts.actions.save') }));
 
     await waitFor(() =>
       expect(requestBodyFor('/edit')).toEqual({
@@ -124,13 +134,13 @@ describe('editing a draft', () => {
     const user = userEvent.setup();
     await renderDetail();
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: t('drafts.actions.edit') }));
     await user.clear(screen.getByRole('textbox'));
 
     const callsBefore = mockFetch.mock.calls.length;
-    await user.click(screen.getByRole('button', { name: 'Save Edit' }));
+    await user.click(screen.getByRole('button', { name: t('drafts.actions.save') }));
 
-    expect(await screen.findByText('Draft body must not be empty')).toBeTruthy();
+    expect(await screen.findByText(t('drafts.actions.emptyBody'))).toBeTruthy();
     expect(mockFetch.mock.calls.length).toBe(callsBefore);
   });
 
@@ -138,12 +148,12 @@ describe('editing a draft', () => {
     const user = userEvent.setup();
     await renderDetail();
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: t('drafts.actions.edit') }));
     await user.clear(screen.getByRole('textbox'));
     await user.type(screen.getByRole('textbox'), 'scratch');
-    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await user.click(screen.getByRole('button', { name: t('common.cancel') }));
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: t('drafts.actions.edit') }));
     expect(textareaValue()).toBe(DRAFT_BODY);
   });
 });
@@ -155,7 +165,7 @@ describe('approving and rejecting', () => {
 
     mockFetch.mockResolvedValueOnce(jsonOk({ draft: { status: 'approved' } }));
     mockFetch.mockResolvedValueOnce(jsonOk(draftPayload({ status: 'approved', version: 4 })));
-    await user.click(screen.getByRole('button', { name: 'Approve' }));
+    await user.click(screen.getByRole('button', { name: t('drafts.actions.approve') }));
 
     await waitFor(() => expect(requestBodyFor('/approve')).toEqual({ expectedLockVersion: 3 }));
   });
@@ -166,7 +176,7 @@ describe('approving and rejecting', () => {
 
     mockFetch.mockResolvedValueOnce(jsonOk({ draft: { status: 'rejected' } }));
     mockFetch.mockResolvedValueOnce(jsonOk(draftPayload({ status: 'rejected', version: 4 })));
-    await user.click(screen.getByRole('button', { name: 'Reject' }));
+    await user.click(screen.getByRole('button', { name: t('drafts.actions.reject') }));
 
     await waitFor(() => expect(requestBodyFor('/reject')).toEqual({ expectedLockVersion: 3 }));
   });
@@ -176,10 +186,10 @@ describe('approving and rejecting', () => {
     await renderDetail();
 
     mockFetch.mockResolvedValueOnce(jsonErr(409, 'STALE_VERSION', 'stale'));
-    await user.click(screen.getByRole('button', { name: 'Approve' }));
+    await user.click(screen.getByRole('button', { name: t('drafts.actions.approve') }));
 
-    expect(await screen.findByText(/modified by another reviewer/i)).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Reload' })).toBeTruthy();
+    expect(await screen.findByText(t('drafts.detail.stale'))).toBeTruthy();
+    expect(screen.getByRole('button', { name: t('common.reload') })).toBeTruthy();
   });
 
   it('shows a permission message on 403 rather than a generic error', async () => {
@@ -187,22 +197,38 @@ describe('approving and rejecting', () => {
     await renderDetail();
 
     mockFetch.mockResolvedValueOnce(jsonErr(403, 'FORBIDDEN', 'forbidden'));
-    await user.click(screen.getByRole('button', { name: 'Approve' }));
+    await user.click(screen.getByRole('button', { name: t('drafts.actions.approve') }));
 
-    expect(await screen.findByText(/do not have permission/i)).toBeTruthy();
+    expect(await screen.findByText(t('drafts.actions.permissionDenied'))).toBeTruthy();
   });
 
-  it('surfaces the API message on any other failure', async () => {
+  it('translates a known API error code rather than echoing the English', async () => {
     const user = userEvent.setup();
     await renderDetail();
 
     mockFetch.mockResolvedValueOnce(
       jsonErr(422, 'INVALID_STATE_TRANSITION', 'This draft cannot be modified in its current state')
     );
-    await user.click(screen.getByRole('button', { name: 'Approve' }));
+    await user.click(screen.getByRole('button', { name: t('drafts.actions.approve') }));
+
+    expect(await screen.findByText(t('errors.INVALID_STATE_TRANSITION'))).toBeTruthy();
+    expect(document.body.textContent).not.toContain('cannot be modified');
+  });
+
+  it('falls back to the server sentence for a code it has no translation for', async () => {
+    // The failure this prevents is a reviewer seeing `P3B0…` or a blank box
+    // the first time a new SQLSTATE is mapped server-side. English is a worse
+    // answer than Spanish and a much better one than an identifier.
+    const user = userEvent.setup();
+    await renderDetail();
+
+    mockFetch.mockResolvedValueOnce(
+      jsonErr(422, 'SOMETHING_MAPPED_LATER', 'The server explained itself in English')
+    );
+    await user.click(screen.getByRole('button', { name: t('drafts.actions.approve') }));
 
     expect(
-      await screen.findByText('This draft cannot be modified in its current state')
+      await screen.findByText('The server explained itself in English')
     ).toBeTruthy();
   });
 });
@@ -217,7 +243,7 @@ describe('the version a second action uses', () => {
     const user = userEvent.setup();
     await renderDetail();
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: t('drafts.actions.edit') }));
 
     let resolveRefetch: (value: unknown) => void = () => {};
     mockFetch.mockResolvedValueOnce(jsonOk({ draft: { version: 4 } }));
@@ -227,12 +253,12 @@ describe('the version a second action uses', () => {
       })
     );
 
-    await user.click(screen.getByRole('button', { name: 'Save Edit' }));
+    await user.click(screen.getByRole('button', { name: t('drafts.actions.save') }));
 
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('button', { name: t('drafts.actions.approve') })).toBeNull());
 
     resolveRefetch(jsonOk(draftPayload({ version: 4 })));
-    await screen.findByRole('button', { name: 'Approve' });
+    await screen.findByRole('button', { name: t('drafts.actions.approve') });
   });
 });
 
@@ -242,7 +268,9 @@ describe('what the UI must never offer', () => {
     // owner approval. A real DOM assertion, not a comment.
     await renderDetail();
 
-    expect(screen.queryByRole('button', { name: /send/i })).toBeNull();
+    // /enviar/ as well as /send/: this guard was written against an English
+    // UI, and a Spanish "Enviar" button would have sailed straight through it.
+    expect(screen.queryByRole('button', { name: /send|enviar/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /whatsapp/i })).toBeNull();
     expect(document.body.textContent).not.toMatch(/whatsapp/i);
   });
@@ -250,19 +278,19 @@ describe('what the UI must never offer', () => {
   it('renders no action buttons at all for an approved draft', async () => {
     await renderDetail(draftPayload({ status: 'approved' }));
 
-    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Reject' })).toBeNull();
-    expect(screen.getByText('Approved')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: t('drafts.actions.approve') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('drafts.actions.edit') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('drafts.actions.reject') })).toBeNull();
+    expect(screen.getByText(t('drafts.status.approved'))).toBeTruthy();
   });
 
   it('renders no action buttons at all for a rejected draft', async () => {
     await renderDetail(draftPayload({ status: 'rejected' }));
 
-    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Reject' })).toBeNull();
-    expect(screen.getByText('Rejected')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: t('drafts.actions.approve') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('drafts.actions.edit') })).toBeNull();
+    expect(screen.queryByRole('button', { name: t('drafts.actions.reject') })).toBeNull();
+    expect(screen.getByText(t('drafts.status.rejected'))).toBeTruthy();
   });
 });
 
@@ -272,7 +300,7 @@ describe('states the reviewer can land in', () => {
     render(<DraftDetail draftId={DRAFT_ID} />);
 
     expect(
-      await screen.findByText(/not currently available for your organization/i)
+      await screen.findByText(t('drafts.detail.featureUnavailable'))
     ).toBeTruthy();
   });
 
@@ -280,16 +308,16 @@ describe('states the reviewer can land in', () => {
     mockFetch.mockResolvedValueOnce(jsonErr(404, 'DRAFT_NOT_FOUND', 'nope'));
     render(<DraftDetail draftId={DRAFT_ID} />);
 
-    expect(await screen.findByText('Draft not found.')).toBeTruthy();
-    expect(screen.getByText('Back to inbox')).toBeTruthy();
+    expect(await screen.findByText(t('drafts.detail.notFound'))).toBeTruthy();
+    expect(screen.getByText(t('drafts.detail.backToInbox'))).toBeTruthy();
   });
 
   it('shows the draft body and its model attribution', async () => {
     await renderDetail();
 
     expect(screen.getByText(DRAFT_BODY)).toBeTruthy();
-    expect(screen.getByText('Provider: langdock')).toBeTruthy();
-    expect(screen.getByText('Model: gpt-5-mini')).toBeTruthy();
+    expect(screen.getByText(t('drafts.detail.provider', { provider: 'langdock' }))).toBeTruthy();
+    expect(screen.getByText(t('drafts.detail.model', { model: 'gpt-5-mini' }))).toBeTruthy();
   });
 });
 
@@ -306,7 +334,7 @@ describe('DraftActions in isolation', () => {
       />
     );
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: t('drafts.actions.edit') }));
     expect(textareaValue()).toBe('the body under review');
   });
 
@@ -322,7 +350,7 @@ describe('DraftActions in isolation', () => {
       />
     );
 
-    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: t('drafts.actions.edit') }));
     expect(textareaValue()).toBe('');
   });
 });

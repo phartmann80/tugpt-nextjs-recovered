@@ -1,11 +1,15 @@
 # docker-compose.yml
 #
-# Production runtime for TuGPT.ai on its dedicated VPS (212.227.44.13 —
-# see docs/production_environment.md, section 5, for the full deployment
-# runbook, including the cutover plan from the existing systemd-native
-# workers to this stack). Intended to be run from /opt/tugpt as:
+# Production runtime for TuGPT on its dedicated VPS (212.227.44.13).
+# See docs/production_environment.md for the deployment runbook.
 #
-#   docker compose -p tugpt up -d --build
+# As of the 2026-08-25 rebuild this file IS production. The host was
+# reinstalled after the 2026-08-24 compromise, so no systemd-native
+# workers survived; deploy/systemd/tugpt.service owns the whole stack —
+# web, both workers, and Caddy under the `proxy` profile — and is enabled
+# so it comes back after a reboot. Deploying a new commit is:
+#
+#   cd /opt/tugpt && git pull && systemctl restart tugpt.service
 #
 # The explicit `-p tugpt` project name namespaces containers/networks
 # under a stable, predictable prefix regardless of what else runs on the
@@ -14,23 +18,61 @@
 # Secrets and per-environment config are NOT stored in this repo and are
 # NOT baked into images. Every service loads its environment at container
 # start via `env_file`, from a file that lives only on the host, under
-# /etc/tugpt/ (root-owned, 0600) — never committed to git. This matches
-# the existing systemd-native workers' env layout
-# (/etc/tugpt/web.env, /etc/tugpt/worker.env) so the cutover doesn't
-# require re-provisioning secrets.
+# /etc/tugpt/ (root-owned, 0600) — never committed to git.
+#
+# ---------------------------------------------------------------------
+# STANDING RULE — one consumer per PGMQ queue.
+#
+# `whatsapp-worker` and `draft-worker` below are the only consumers of
+# whatsapp_inbound and draft_generation respectively. A second consumer —
+# a native systemd unit, a stray `docker compose up` under a different
+# project name, a hand-run `pnpm dev` against production credentials —
+# double-processes every message.
+#
+# There are no native worker units on the current host, so there is
+# nothing to conflict with today. The rule outlives that fact: check
+# before starting anything that polls.
+#
+# Related: tugpt.service and tugpt-web.service declare Conflicts= on each
+# other. tugpt-web.service brings up `web` alone and belongs to the
+# earlier web-only deployment; it must not run alongside tugpt.service.
+# ---------------------------------------------------------------------
 
 services:
   web:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      # Next.js inlines NEXT_PUBLIC_* at BUILD time, into the server bundle as
+      # well as the client one. Without this args block Compose forwards
+      # nothing — shell variables on the `docker compose build` command line are
+      # used for interpolation, not passed to the builder — so the Dockerfile's
+      # ARGs default to empty and the image is built with blank values.
+      #
+      # That failure is silent and total. proxy.ts reads
+      # NEXT_PUBLIC_SUPABASE_URL and redirects to /auth/login when it is empty,
+      # so every /dashboard route bounces to the login page forever; server.ts
+      # throws "Supabase URL is missing"; every /api/v1 route builds a client
+      # against ''. The app looks deployed and is entirely dead, and it reads
+      # like an authentication bug rather than a build one.
+      #
+      # `:?` makes Compose refuse to run rather than bake empties. Supply them
+      # by sourcing the env file first — see docs/production_environment.md
+      # section 5.4a:
+      #   set -a; . /etc/tugpt/web.env; set +a
+      # Neither value is a secret (the anon key is public by design); they are
+      # kept in web.env so there is one place to change them.
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: "${NEXT_PUBLIC_SUPABASE_URL:?missing - run 'set -a; . /etc/tugpt/web.env; set +a' before building}"
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: "${NEXT_PUBLIC_SUPABASE_ANON_KEY:?missing - run 'set -a; . /etc/tugpt/web.env; set +a' before building}"
     image: tugpt-web:latest
     restart: unless-stopped
     env_file:
       - /etc/tugpt/web.env
-    # Bind to loopback only; an external reverse proxy (nginx/Caddy, not
-    # part of this repo) terminates TLS on 80/443 and forwards to 3001.
-    # No container here should bind 0.0.0.0:80 or 0.0.0.0:443 directly.
+    # Bind to loopback only. Nothing reaches this from outside the host
+    # unless the `caddy` service below is enabled, and even then Caddy
+    # talks to it over the compose network (web:3000), not this port —
+    # 3001 stays a local debugging convenience.
     ports:
       - "127.0.0.1:3001:3000"
     networks:
@@ -42,12 +84,80 @@ services:
       retries: 3
       start_period: 15s
 
+  # TLS termination and public routing. OFF by default: the `proxy` profile
+  # means `docker compose up -d web` neither starts it nor can start it by
+  # accident. Enable deliberately with
+  #   docker compose -p tugpt --profile proxy up -d caddy
+  # once TUGPT_DOMAIN is set in /etc/tugpt/web.env and its DNS A/AAAA record
+  # points at this host. See docs/production_environment.md section 5.4b.
+  #
+  # Without this, the dashboard is reachable on the server (127.0.0.1:3001) and
+  # nowhere else, which is the state section 5.4a leaves behind.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["proxy"]
+    restart: unless-stopped
+    # TUGPT_DOMAIN is read from here by the Caddyfile. Using env_file rather
+    # than Compose interpolation on purpose: an interpolated ${VAR} is resolved
+    # when the file is parsed, so it would be required by every compose command
+    # even with the profile off.
+    env_file:
+      - /etc/tugpt/web.env
+    # Explicit resolvers, so this container does not depend on the host's
+    # /etc/resolv.conf.
+    #
+    # Docker copies that file into containers. On a systemd-resolved host it
+    # can contain only 127.0.0.53 — the stub listener, which lives in the
+    # host's network namespace and is unreachable from inside a container.
+    # Docker usually detects the stub and substitutes public resolvers; on
+    # 2026-08-24 it did not, and the first ACME challenge failed with no DNS
+    # at all. It was fixed on the host by repointing /etc/resolv.conf at
+    # /run/systemd/resolve/resolv.conf, which works and is one symlink away
+    # from silently reverting.
+    #
+    # The consequence of reverting is invisible for weeks: the existing
+    # certificate keeps serving while every renewal attempt fails, and the
+    # site goes down at expiry. Pinning resolvers here removes the dependency
+    # entirely. deploy/caddy/check-cert.sh is the belt to this braces.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # caddy_data holds the issued certificates and the ACME account key.
+      # Losing it means re-issuing on every restart, which will hit Let's
+      # Encrypt rate limits. It must stay a named volume.
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - tugpt
+    depends_on:
+      - web
+
   whatsapp-worker:
     build:
       context: .
       dockerfile: apps/worker/Dockerfile
     image: tugpt-worker:latest
     restart: unless-stopped
+    # Runs the compiled output, which is only correct because every
+    # @tugpt/* package now builds to CommonJS dist/ and points `main` there.
+    #
+    # Between 2026-08-25 and this change it ran under tsx instead. The
+    # packages shipped "main": "./src/index.ts" with no build script, so the
+    # compiled worker resolved @tugpt/database to raw TypeScript; Node
+    # type-stripped it and then applied ESM rules to the package's own
+    # extensionless `./client` import, which do not infer extensions. Both
+    # workers crash-looped at boot with ERR_MODULE_NOT_FOUND.
+    #
+    # worker-start-command.test.ts pins the precondition rather than the
+    # command: `node dist/...` is allowed only while every @tugpt/* package
+    # the worker depends on has a build script. Remove one and this line
+    # turns the suite red before it can reach a container.
     command: ["node", "dist/index.js"]
     env_file:
       - /etc/tugpt/worker.env
@@ -66,6 +176,7 @@ services:
       dockerfile: apps/worker/Dockerfile
     image: tugpt-worker:latest
     restart: unless-stopped
+    # Compiled output, same reasoning as whatsapp-worker above.
     command: ["node", "dist/draft-index.js"]
     env_file:
       - /etc/tugpt/worker.env
@@ -85,3 +196,9 @@ services:
 networks:
   tugpt:
     driver: bridge
+
+volumes:
+  # Issued certificates and the ACME account key. Only used by the `proxy`
+  # profile; declaring them here is inert otherwise.
+  caddy_data:
+  caddy_config:

@@ -36,9 +36,9 @@ human-approved draft, with the audit trail and quota accounting to show for it:
 synthetic inbound message
   -> ingest_whatsapp_message_event      (service-role RPC)
   -> whatsapp_inbound PGMQ queue
-  -> tugpt-whatsapp-worker -> process_inbound_message
+  -> whatsapp-worker container -> process_inbound_message
   -> draft_generation PGMQ queue
-  -> tugpt-draft-worker -> Langdock (LANGDOCK_MODEL, default gpt-5-mini)
+  -> draft-worker container -> Langdock (LANGDOCK_MODELS rotation, default gpt-5-mini first)
   -> store_draft   (ai_drafts + ai_draft_revisions + quota consume)
   -> human edit + approve, as a real signed-in user
   -> audit trail + quota decrement
@@ -120,7 +120,9 @@ confuse with production data:
 - **`LANGDOCK_MODELS` (or `LANGDOCK_MODEL`) present in `/etc/tugpt/worker.env`** — see §6a.
 - Migrations applied through `20260819000002` — see [docs/server-migrations.md](server-migrations.md).
 - `/etc/tugpt/migrate.env` present (root-owned, `0600`) if you need to apply migrations.
-- `tugpt-whatsapp-worker` and `tugpt-draft-worker` both running, restarted since the deploy.
+- The `whatsapp-worker` and `draft-worker` **containers** both running, recreated since the
+  deploy. This host has no systemd-native worker units — the whole stack is one unit,
+  `tugpt.service` (`docs/production_environment.md` §5.1).
 - No new credentials needed: the harness reads the same env files the workers already use.
 
 ### 6a. Model selection and rotation
@@ -139,7 +141,7 @@ explicit and validated at worker boot against a four-model allowlist:
 Every other model Langdock offers (`o3`, `o4-mini`, `gpt-5.4*`, `gpt-5.5`, `gpt-5.6-*`,
 `gpt-5.2-pro`, `langdock-llama-3.3-70b-2`) is forbidden on cost grounds and is **rejected at boot**,
 even if the env var names it. `auto` is likewise rejected. Changing models is an env edit plus a
-worker restart — never a code deploy.
+worker recreate — never a code deploy.
 
 **Rotation (new).** Each approved model has its own Langdock quota (500 requests / 250k tokens), so
 they are four independent capacity buckets. On a per-model quota rejection the worker tries the next
@@ -148,23 +150,41 @@ model in the configured order within the same attempt:
 | Variable | Effect |
 |---|---|
 | `LANGDOCK_MODELS=gpt-5-mini,gpt-5.1,gpt-5.2,gpt-5` | **Recommended.** Rotation in that order. |
-| `LANGDOCK_MODEL=gpt-5-mini` | Pins one model, rotation off. What the server has today. |
+| `LANGDOCK_MODEL=gpt-5-mini` | Pins one model, rotation off. The escape hatch, and back-compatible for hosts configured before rotation existed. |
 | neither | Defaults to the full allowlist, cheapest first. |
 
 `LANGDOCK_MODELS` wins if both are set, and the worker logs that `LANGDOCK_MODEL` was ignored.
 Rotation is narrow on purpose: only a 429, or a 400 in which the provider says the model is unknown.
 Auth failures, malformed requests, timeouts and 5xx do **not** rotate — see ADR-006.
 
-To switch the server from a pinned model to rotation:
+**Check which one the server actually has** rather than assuming. This paragraph used to assert
+that the server was pinned to a single model; the host was reinstalled from scratch on 2026-08-24
+and `/etc/tugpt/worker.env` is being recreated, so any claim here about what is set would be a
+guess. The worker settles it at boot:
+
+```bash
+cd /opt/tugpt
+docker compose -p tugpt logs --tail=50 draft-worker | grep 'model order resolved'
+```
+
+That line reports the resolved order, which variable it came from (`LANGDOCK_MODELS`,
+`LANGDOCK_MODEL`, or `default`), and whether rotation is enabled. It is the only answer that
+cannot be stale.
+
+To move a pinned host onto rotation:
 
 ```bash
 sudo sed -i 's/^LANGDOCK_MODEL=.*/LANGDOCK_MODELS=gpt-5-mini,gpt-5.1,gpt-5.2,gpt-5/' \
   /etc/tugpt/worker.env
-sudo systemctl restart tugpt-draft-worker
-journalctl -u tugpt-draft-worker -n 20 --no-pager | grep 'model order resolved'
+cd /opt/tugpt
+sudo docker compose -p tugpt up -d --force-recreate draft-worker
+docker compose -p tugpt logs --tail=20 draft-worker | grep 'model order resolved'
 ```
 
-The log line reports the resolved order and whether rotation is enabled.
+`--force-recreate`, not `docker compose restart`. `restart` reuses the existing
+container, and `env_file` is read when a container is **created** — so a restart
+after editing `/etc/tugpt/worker.env` leaves the old value in place and the
+`model order resolved` line reports what you were trying to change.
 
 ### 6b. Schema gate (new)
 
@@ -214,10 +234,11 @@ for v in LANGDOCK_API_CODE LANGDOCK_MODELS; do
     && echo "$v: present" || echo "$v: MISSING"
 done
 
-# --- restart the workers on the new code ---
-sudo systemctl restart tugpt-whatsapp-worker tugpt-draft-worker
+# --- recreate the workers on the new code ---
+sudo systemctl restart tugpt.service
 sleep 5
-systemctl is-active tugpt-whatsapp-worker tugpt-draft-worker
+docker compose -p tugpt ps --status running --services \
+  | grep -E '^(whatsapp-worker|draft-worker)$'   # both must print
 
 # --- dry run: connectivity + safety checks only, makes no writes ---
 pnpm --filter @tugpt/worker exec tsx src/e2e/milestone1.ts preflight \
@@ -229,9 +250,9 @@ pnpm --filter @tugpt/worker exec tsx src/e2e/milestone1.ts all \
   2>&1 | tee /tmp/milestone1-evidence.txt
 
 # --- worker logs for the same window, to attach to the evidence pack ---
-journalctl -u tugpt-draft-worker --since '15 min ago' --no-pager \
+docker compose -p tugpt logs --since 15m --no-log-prefix draft-worker \
   > /tmp/milestone1-draft-worker.log
-journalctl -u tugpt-whatsapp-worker --since '15 min ago' --no-pager \
+docker compose -p tugpt logs --since 15m --no-log-prefix whatsapp-worker \
   > /tmp/milestone1-whatsapp-worker.log
 
 # --- switch draft generation back off when finished ---
@@ -268,15 +289,15 @@ enabled, and a stale-version approve being accepted (which would mean optimistic
 |---|---|---|
 | `90003 CONNECTION_NOT_FOUND` | connection row missing or `status != 'active'` | re-run `seed` |
 | Job `skipped`, `FEATURE_DISABLED` | the flag AND did not resolve true | check the global row is `true` (§3) |
-| Job `skipped`, quota reason | no live quota period, or ceiling hit | re-run `seed` |
+| Job `skipped`, `QUOTA_DENIED` | no live quota period, or ceiling hit. `QUOTA_DENIED` is the only skip reason a quota denial writes | re-run `seed` |
 | Job `dead_lettered`, `DRAFT_INVALID_REQUEST` | the provider rejected the request (4xx) | read `failed_jobs.provider_error_detail` — it quotes the provider verbatim |
-| Job `dead_lettered`, `DRAFT_PROVIDER_CONFIG_ERROR` | `LANGDOCK_API_CODE` missing, or a model off the allowlist / duplicated in `LANGDOCK_MODELS` | fix `/etc/tugpt/worker.env`, restart |
+| Job `dead_lettered`, `DRAFT_PROVIDER_CONFIG_ERROR` | `LANGDOCK_API_CODE` missing, or a model off the allowlist / duplicated in `LANGDOCK_MODELS` | fix `/etc/tugpt/worker.env`, recreate the container |
 | Job `dead_lettered`, `DRAFT_EXHAUSTED_RETRIES`, detail says `model(s) exhausted` | every model's quota is spent | wait for the quota window, or widen `LANGDOCK_MODELS` |
 | Job `dead_lettered`, `DRAFT_PROVIDER_AUTH_ERROR` | key present but rejected by Langdock | check the key is valid and current |
 | Job `dead_lettered`, `DRAFT_EXHAUSTED_RETRIES` | three genuinely transient failures — Langdock down or rate limiting | retry later; single-provider means no fallback (ADR-006) |
 | Job `dead_lettered`, `DRAFT_INTERNAL_ERROR` | an archive was rejected and fell back | the log line names the code that was refused — the worker/RPC allowlists have drifted again |
-| Timeout, no `messages` row | whatsapp worker not consuming | `systemctl status tugpt-whatsapp-worker` |
-| Timeout, message but no draft | draft worker not consuming | `systemctl status tugpt-draft-worker` |
+| Timeout, no `messages` row | whatsapp worker not consuming | `docker compose -p tugpt ps whatsapp-worker` |
+| Timeout, message but no draft | draft worker not consuming | `docker compose -p tugpt ps draft-worker` |
 | `P3B02 FORBIDDEN` on review | reviewer not a member, or no user JWT | pass `--env-file /etc/tugpt/web.env` |
 | `REFUSING TO RUN: the database is not running the schema this checkout expects` | migrations in the checkout are not applied | [docs/server-migrations.md](server-migrations.md) §1 |
 | `migration ledger unreadable` | `applied_migration_versions()` not installed, i.e. `20260819000002` not applied | same — apply migrations |

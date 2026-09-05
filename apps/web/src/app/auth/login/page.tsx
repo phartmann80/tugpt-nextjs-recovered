@@ -6,8 +6,11 @@
 import { Suspense, useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getBrowserClient } from '@/lib/supabase/browser';
+import { APP_CONFIG } from '@/config/locales';
+import { useT } from '@/i18n/provider';
 
 function LoginForm() {
+  const t = useT();
   const router = useRouter();
   const searchParams = useSearchParams();
   const [email, setEmail] = useState('');
@@ -49,7 +52,11 @@ function LoginForm() {
       router.replace(redirect);
       router.refresh();
     } catch {
-      setError('An unexpected error occurred');
+      // Supabase's own auth errors (`error.message` above) stay in the
+      // language Supabase sends. They are the provider's text, not ours, and
+      // translating them here would mean maintaining a mapping of somebody
+      // else's strings. This one is ours.
+      setError(t('errors.INTERNAL_ERROR'));
     } finally {
       setLoading(false);
     }
@@ -59,7 +66,7 @@ function LoginForm() {
     <div className="flex min-h-screen items-center justify-center bg-zinc-50 px-4">
       <div className="w-full max-w-md">
         <h1 className="mb-6 text-center text-2xl font-bold text-zinc-900">
-          TuGPT.ai Login
+          {t('auth.login.title', { app: APP_CONFIG.name })}
         </h1>
 
         {error && (
@@ -71,7 +78,7 @@ function LoginForm() {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label htmlFor="email" className="mb-1 block text-sm font-medium text-zinc-700">
-              Email
+              {t('auth.login.email')}
             </label>
             <input
               id="email"
@@ -80,12 +87,12 @@ function LoginForm() {
               onChange={(e) => setEmail(e.target.value)}
               required
               className="w-full rounded-lg border border-zinc-300 p-2 text-sm focus:border-blue-500 focus:outline-none"
-              placeholder="you@example.com"
+              placeholder={t('auth.login.emailPlaceholder')}
             />
           </div>
           <div>
             <label htmlFor="password" className="mb-1 block text-sm font-medium text-zinc-700">
-              Password
+              {t('auth.login.password')}
             </label>
             <input
               id="password"
@@ -94,7 +101,7 @@ function LoginForm() {
               onChange={(e) => setPassword(e.target.value)}
               required
               className="w-full rounded-lg border border-zinc-300 p-2 text-sm focus:border-blue-500 focus:outline-none"
-              placeholder="••••••••"
+              placeholder={t('auth.login.passwordPlaceholder')}
             />
           </div>
           <button
@@ -102,7 +109,7 @@ function LoginForm() {
             disabled={loading}
             className="w-full rounded-lg bg-zinc-800 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-50"
           >
-            {loading ? 'Signing in...' : 'Sign In'}
+            {loading ? t('auth.login.submitting') : t('auth.login.submit')}
           </button>
         </form>
       </div>
@@ -110,15 +117,18 @@ function LoginForm() {
   );
 }
 
+function LoginFallback() {
+  const t = useT();
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-zinc-50">
+      <p className="text-zinc-500">{t('common.loading')}</p>
+    </div>
+  );
+}
+
 export default function LoginPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="flex min-h-screen items-center justify-center bg-zinc-50">
-          <p className="text-zinc-500">Loading...</p>
-        </div>
-      }
-    >
+    <Suspense fallback={<LoginFallback />}>
       <LoginForm />
     </Suspense>
   );

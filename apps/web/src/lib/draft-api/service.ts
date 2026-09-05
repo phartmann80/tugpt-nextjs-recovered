@@ -9,15 +9,30 @@ import type {
   DraftDetail,
   DraftSourceMessage,
   DraftConversationContext,
+  ConversationThread,
+  ThreadMessage,
   Revision,
   ReviewEvent,
 } from './types';
+import { maskContact } from './contact-display';
 
 const DRAFTS_TABLE = 'ai_drafts';
 const REVISIONS_TABLE = 'ai_draft_revisions';
 const EVENTS_TABLE = 'ai_draft_review_events';
 const MESSAGES_TABLE = 'messages';
 const CONVERSATIONS_TABLE = 'conversations';
+
+/**
+ * How many messages a thread shows without being asked.
+ *
+ * Enough that a pilot conversation is shown whole, small enough that a long one
+ * cannot turn a page render into a large response. `MAX_THREAD_LIMIT` exists
+ * because the limit arrives from a query string: a caller asking for 100000 is
+ * asking this server to read a conversation into memory, and "the client would
+ * not do that" is not a bound.
+ */
+export const DEFAULT_THREAD_LIMIT = 50;
+export const MAX_THREAD_LIMIT = 200;
 
 export class DraftApiService {
   constructor(private supabase: TypedSupabaseClient) {}
@@ -193,6 +208,98 @@ export class DraftApiService {
     return (data || []) as unknown as ReviewEvent[];
   }
 
+  /**
+   * The conversation a draft belongs to, as a bounded window of messages.
+   *
+   * WHY IT IS SCOPED TO A DRAFT AND NOT TO A CONVERSATION
+   *
+   * The reviewer arrives here from a draft, and every existing authorization
+   * and feature-gate path in this file is keyed on one — so this route reuses
+   * them exactly rather than introducing a second way to be wrong. A
+   * conversations API is a Sep 25 concern (the unified inbox), and what that
+   * needs is a list of *conversations*, which is a different query, not this
+   * one with a different door on it.
+   *
+   * WHY IT IS BOUNDED
+   *
+   * `messages.body` is up to 4096 characters and a conversation has no ceiling
+   * on rows. Reading a whole conversation into a response because it happens to
+   * be short today is the kind of thing that works for a year and then does not.
+   * The window is the newest `limit` messages, returned oldest-first because
+   * that is reading order.
+   *
+   * `has_more` comes from asking for one row more than the window and seeing
+   * whether it arrives — no second COUNT query, and no possibility of the count
+   * and the rows disagreeing because they were taken at different moments.
+   *
+   * Cursor pagination is deliberately not here. "Load older" belongs with the
+   * inbox work that will also need it, and a cursor built now against one
+   * screen's guess would be the second one written.
+   */
+  async getConversationThread(
+    organizationId: string,
+    draftId: string,
+    limit = DEFAULT_THREAD_LIMIT
+  ): Promise<ConversationThread | null> {
+    const bounded = Math.min(Math.max(1, Math.floor(limit)), MAX_THREAD_LIMIT);
+
+    const { data: draftRow } = await this.supabase
+      .from(DRAFTS_TABLE)
+      .select('conversation_id, source_message_id')
+      .eq('id', draftId)
+      .eq('organization_id', organizationId)
+      .single();
+
+    if (!draftRow) return null;
+
+    const draftData = draftRow as Record<string, unknown>;
+    const conversationId = draftData['conversation_id'] as string;
+    const sourceMessageId = draftData['source_message_id'] as string | null;
+
+    const conversation = await this.getConversation(conversationId, organizationId);
+    if (!conversation) return null;
+
+    // `organization_id` as well as `conversation_id`. RLS already scopes this to
+    // the caller's organizations, but RLS answers "may this user see the row",
+    // not "is this row part of the conversation the caller asked about" — and
+    // this is a request whose whole output is customer message text.
+    const { data, error } = await this.supabase
+      .from(MESSAGES_TABLE)
+      .select('id, body, direction, created_at')
+      .eq('conversation_id', conversationId)
+      .eq('organization_id', organizationId)
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(bounded + 1);
+
+    if (error) {
+      throw error;
+    }
+
+    const rows = (data || []) as unknown as Array<Record<string, unknown>>;
+    const hasMore = rows.length > bounded;
+    const window = hasMore ? rows.slice(0, bounded) : rows;
+
+    const messages: ThreadMessage[] = window
+      .map((row) => ({
+        id: row['id'] as string,
+        body: (row['body'] as string | null) ?? null,
+        direction: row['direction'] as 'inbound' | 'outbound',
+        created_at: row['created_at'] as string,
+        is_source: sourceMessageId !== null && row['id'] === sourceMessageId,
+      }))
+      .reverse();
+
+    return {
+      conversation_id: conversation.id,
+      contact_display: conversation.contact_display,
+      status: conversation.status,
+      messages,
+      has_more: hasMore,
+      source_in_window: messages.some((m) => m.is_source),
+    };
+  }
+
   // --- Private helpers ---
 
   private async getSourceMessagePreview(
@@ -283,9 +390,9 @@ export class DraftApiService {
         .single();
 
       if (conv) {
-        const phone = (conv as Record<string, unknown>)['contact_phone'] as string;
-        // Mask the phone number: show last 4 digits
-        contactDisplay = phone ? `***-***-${phone.slice(-4)}` : null;
+        contactDisplay = maskContact(
+          (conv as Record<string, unknown>)['contact_phone'] as string
+        );
       }
     }
 
@@ -313,7 +420,10 @@ export class DraftApiService {
     const convData = data as Record<string, unknown>;
     return {
       id: convData['id'] as string,
-      contact_phone: convData['contact_phone'] as string,
+      // Masked. This returned the raw number until 2026-09-01 — see
+      // `contact-display.ts` for how long that had been true and why nothing
+      // noticed.
+      contact_display: maskContact(convData['contact_phone'] as string),
       status: convData['status'] as 'open' | 'needs_human' | 'closed',
     };
   }

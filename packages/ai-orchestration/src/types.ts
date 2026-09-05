@@ -23,6 +23,21 @@ export interface DraftConfig {
   readonly responseRules: string;
   readonly tone: string;
   readonly maxDraftLength: number;
+  /**
+   * The owning organization's `organizations.locale`, which decides the
+   * language of the prompt scaffolding and the non-negotiable rules.
+   *
+   * Typed `string`, not a union, on purpose: this package would otherwise have
+   * to depend on `@tugpt/database` for `OrganizationLocale`, and the value
+   * arriving here has already crossed a database boundary, so a union would be
+   * a claim rather than a guarantee. `scaffoldingFor` coerces anything it
+   * cannot render to Spanish, and `apps/worker/tests` asserts that the set it
+   * can render is exactly `ORGANIZATION_LOCALES`.
+   *
+   * Optional so that a caller written before 2026-08-31 still produces a valid
+   * Spanish prompt rather than failing to compile in a hurry.
+   */
+  readonly locale?: string;
 }
 
 /** Request for draft generation. */
@@ -39,6 +54,27 @@ export interface DraftResult {
   readonly provider: string;
   readonly model: string;
   readonly latencyMs: number;
+  /**
+   * The provider's own identifier for the call.
+   *
+   * Carried so a recorded cost can be matched back to an invoice line. Without
+   * it, a disputed charge has nothing on our side to reconcile against.
+   */
+  readonly providerReference: string;
+  /**
+   * Tokens consumed, straight from the provider's response.
+   *
+   * Every adapter has computed this since the contract was written
+   * (`adapter.ts:41-45`); until migration 20260903000002 nothing persisted it,
+   * so it was measured on every draft and discarded. It is on `DraftResult`
+   * rather than logged in the orchestrator because the worker is what knows
+   * the organization the cost belongs to.
+   */
+  readonly usage: {
+    readonly promptTokens: number;
+    readonly completionTokens: number;
+    readonly totalTokens: number;
+  };
 }
 
 /** Orchestrator return type: success or structured error. */

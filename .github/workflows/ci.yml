@@ -3,8 +3,18 @@ name: CI
 on:
   push:
     branches: [ main ]
+  # DELIBERATELY UNFILTERED. A `branches:` filter here does not make a pull
+  # request fail its gate — it removes the gate, silently, with no red check to
+  # notice. That happened on 2026-08-30: PR #54 was opened against a feature
+  # branch to keep its diff to one commit, and produced zero check runs. It was
+  # only tested because an unrelated force-push happened to fire `synchronize`.
+  #
+  # Retargeting a pull request at `main` does not rescue it either: changing a
+  # base fires `edited`, which is not one of the default trigger types.
+  #
+  # `push` stays filtered to `main` so a branch is not built twice.
+  # `apps/worker/tests/ci-triggers-every-pull-request.test.ts` keeps this open.
   pull_request:
-    branches: [ main ]
 
 jobs:
   build-and-test:
@@ -38,17 +48,104 @@ jobs:
       - name: Build
         run: pnpm build
 
+  # The pgTAP suite in supabase/tests/database. Until 2026-08-20 these 19 files
+  # (~360 assertions) ran nowhere: CI had only the pnpm gate and the image
+  # build, and nothing invoked `supabase test db`. Every guarantee TuGPT makes
+  # about tenant isolation, RPC execute grants, the SQLSTATE contract and quota
+  # integrity is enforced in the database, so leaving them ungated meant the
+  # security floor was untested on every PR. Turning the gate on immediately
+  # found the suite had drifted behind three migrations.
+  #
+  # `supabase db start` pulls one image (supabase/postgres, pinned by
+  # config.toml's db.major_version), applies supabase/migrations in order, then
+  # runs supabase/seed.sql. No API gateway, auth server or studio is started —
+  # this is the database only, which is all pgTAP needs.
+  database-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          # Pinned rather than `latest` so a CLI release cannot turn a green
+          # PR red on its own. Bump deliberately.
+          version: 2.115.0
+
+      - name: Start local Postgres and apply migrations
+        run: supabase db start
+
+      - name: Run pgTAP suite
+        run: supabase test db --local
+
+  # deploy/check-host.sh is the executable form of the 5.2 pre-deploy security
+  # checklist, written after the 2026-08-24 compromise: the prose version had
+  # "password auth is disabled" as its first item and nothing ever confirmed it.
+  # A checker nobody tests is that same failure one level up, so the fixtures in
+  # check-host.test.sh run here — including a fixture of the exact host state the
+  # box was lost with, and one asserting the caddy service still pins its own
+  # resolvers in docker-compose.yml.
+  #
+  # check-cert.sh is the same class of artifact and was shipped with shellcheck
+  # and no execution, which is that mistake one level further down: a checker
+  # run weekly by cron, whose green output is trusted, that nobody had ever
+  # watched fail. Its fixtures run here too.
+  #
+  # The shellcheck globs are deliberately not a hand-maintained file list - a
+  # new deploy script is covered by adding it, not by remembering to add it
+  # here as well.
+  #
+  # These are POSIX sh scripts with no dependencies; shellcheck ships on the
+  # ubuntu-latest runner. Nothing here touches a server.
+  deploy-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Shellcheck
+        run: shellcheck -s sh deploy/*.sh deploy/caddy/*.sh .github/scripts/*.sh scripts/database-tests/reset_db.test.sh
+
+      - name: Run host-check fixtures
+        run: sh deploy/check-host.test.sh
+
+      - name: Run cert-check fixtures
+        run: sh deploy/caddy/check-cert.test.sh
+
+      # The boot check in docker-build is only worth its place if it reports
+      # correctly. These fixtures drive it against a stubbed docker and cover
+      # the two failures that matter: no start line at all (the 2026-08-25
+      # crash-loop) and a start line followed by an exit, which a plain
+      # log-grep would call a pass.
+      - name: Run worker-boot-check fixtures
+        run: sh .github/scripts/worker-boot-check.test.sh
+
+      # scripts/database-tests/ is the local pgTAP harness. It is not a gate --
+      # `supabase db start` in the database-tests job is -- but it reported
+      # green on six pull requests whose database-tests job was red, because it
+      # differed from a real Supabase database in two specific ways. Those two
+      # properties are now asserted, in both directions, so they cannot be
+      # dropped again without this failing. Needs no database and no network.
+      - name: Run local-db harness fixtures
+        run: sh scripts/database-tests/reset_db.test.sh
+
   docker-build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Build-only validation that apps/web/Dockerfile and
-      # apps/worker/Dockerfile still produce working images (VPS
-      # deployment target, see docs/production_environment.md section 5).
-      # No push/registry step here on purpose — images are built directly
-      # on the VPS from this same Dockerfile during deploy.
+      # Validates that apps/web/Dockerfile and apps/worker/Dockerfile still
+      # produce working images (VPS deployment target, see
+      # docs/production_environment.md section 5). No push/registry step here
+      # on purpose — images are built directly on the VPS from these same
+      # Dockerfiles during deploy.
+      #
+      # The worker image is additionally started, below. It used to be built
+      # and never run, which is how an image that died at boot passed this
+      # job on every PR before 2026-08-25.
       - name: Build web image
         uses: docker/build-push-action@v6
         with:
@@ -57,10 +154,21 @@ jobs:
           push: false
           tags: tugpt-web:ci
 
+      # `load: true` puts the image in the local daemon so the next step can
+      # actually start it. Without it buildx keeps the result in its own cache
+      # and `docker run` finds nothing.
       - name: Build worker image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: apps/worker/Dockerfile
           push: false
+          load: true
           tags: tugpt-worker:ci
+
+      # The gap that let the 2026-08-25 crash-loop reach production: this job
+      # built the worker image on every PR and never started it, so an image
+      # that died at boot passed every gate. Building an artifact is not
+      # evidence that it runs.
+      - name: Boot both workers from the built image
+        run: sh .github/scripts/worker-boot-check.sh tugpt-worker:ci

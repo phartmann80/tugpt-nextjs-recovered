@@ -80,7 +80,7 @@ SELECT has_function('private', 'reserve_draft_usage', ARRAY['uuid'], 'S13: priva
 SELECT has_function('private', 'consume_draft_reservation', ARRAY['uuid'], 'S13: private.consume_draft_reservation exists');
 SELECT has_function('private', 'release_draft_reservation_internal', ARRAY['uuid'], 'S13: private.release_draft_reservation_internal exists');
 SELECT has_function('private', 'store_draft', ARRAY['uuid', 'uuid', 'uuid', 'uuid', 'text', 'text', 'text'], 'S13: private.store_draft exists');
-SELECT has_function('private', 'archive_draft_failed_job', ARRAY['bigint', 'uuid', 'text'], 'S13: private.archive_draft_failed_job exists');
+SELECT has_function('private', 'archive_draft_failed_job', ARRAY['bigint', 'uuid', 'text', 'text'], 'S13: private.archive_draft_failed_job exists (four-argument form, 20260819000001)');
 SELECT has_function('private', 'skip_draft_job', ARRAY['uuid', 'bigint', 'text'], 'S13: private.skip_draft_job exists');
 
 -- S14: Public queue wrapper RPCs for draft_generation exist

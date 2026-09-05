@@ -13,6 +13,8 @@
 
 import { useState } from 'react';
 import type { ApiError } from '@/lib/draft-api/types';
+import { apiErrorText } from '@/lib/draft-api/error-text';
+import { useT } from '@/i18n/provider';
 
 interface DraftActionsProps {
   draftId: string;
@@ -34,6 +36,7 @@ export function DraftActions({
   onActionComplete,
   onStaleVersion,
 }: DraftActionsProps) {
+  const t = useT();
   const [editing, setEditing] = useState(false);
   const [editBody, setEditBody] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -64,13 +67,13 @@ export function DraftActions({
 
       if (!res.ok) {
         const data: ApiError = await res.json();
-        setError(data.error?.message || 'Failed to approve draft');
+        setError(apiErrorText(t, data));
         return;
       }
 
       onActionComplete();
     } catch {
-      setError('Failed to approve draft');
+      setError(t('drafts.actions.approveFailed'));
     } finally {
       setSubmitting(false);
     }
@@ -100,13 +103,13 @@ export function DraftActions({
 
       if (!res.ok) {
         const data: ApiError = await res.json();
-        setError(data.error?.message || 'Failed to reject draft');
+        setError(apiErrorText(t, data));
         return;
       }
 
       onActionComplete();
     } catch {
-      setError('Failed to reject draft');
+      setError(t('drafts.actions.rejectFailed'));
     } finally {
       setSubmitting(false);
     }
@@ -114,7 +117,7 @@ export function DraftActions({
 
   const handleEditSubmit = async () => {
     if (!editBody.trim()) {
-      setError('Draft body must not be empty');
+      setError(t('drafts.actions.emptyBody'));
       return;
     }
 
@@ -141,7 +144,7 @@ export function DraftActions({
 
       if (!res.ok) {
         const data: ApiError = await res.json();
-        setError(data.error?.message || 'Failed to edit draft');
+        setError(apiErrorText(t, data));
         return;
       }
 
@@ -149,7 +152,7 @@ export function DraftActions({
       setEditBody('');
       onActionComplete();
     } catch {
-      setError('Failed to edit draft');
+      setError(t('drafts.actions.editFailed'));
     } finally {
       setSubmitting(false);
     }
@@ -158,9 +161,7 @@ export function DraftActions({
   if (permissionDenied) {
     return (
       <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4">
-        <p className="text-red-700">
-          You do not have permission to perform this action.
-        </p>
+        <p className="text-red-700">{t('drafts.actions.permissionDenied')}</p>
       </div>
     );
   }
@@ -180,7 +181,7 @@ export function DraftActions({
             onChange={(e) => setEditBody(e.target.value)}
             className="w-full rounded-lg border border-zinc-300 p-3 text-sm"
             rows={6}
-            placeholder="Enter the revised draft body..."
+            placeholder={t('drafts.actions.editPlaceholder')}
           />
           <div className="flex gap-2">
             <button
@@ -188,7 +189,7 @@ export function DraftActions({
               disabled={submitting}
               className="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
             >
-              {submitting ? 'Saving...' : 'Save Edit'}
+              {submitting ? t('drafts.actions.saving') : t('drafts.actions.save')}
             </button>
             <button
               onClick={() => {
@@ -199,7 +200,7 @@ export function DraftActions({
               disabled={submitting}
               className="rounded border border-zinc-300 px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-100"
             >
-              Cancel
+              {t('common.cancel')}
             </button>
           </div>
         </div>
@@ -210,7 +211,7 @@ export function DraftActions({
             disabled={submitting}
             className="rounded bg-green-600 px-4 py-2 text-sm text-white hover:bg-green-700 disabled:opacity-50"
           >
-            {submitting ? 'Processing...' : 'Approve'}
+            {submitting ? t('drafts.actions.processing') : t('drafts.actions.approve')}
           </button>
           <button
             onClick={() => {
@@ -223,14 +224,14 @@ export function DraftActions({
             disabled={submitting}
             className="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
           >
-            Edit
+            {t('drafts.actions.edit')}
           </button>
           <button
             onClick={handleReject}
             disabled={submitting}
             className="rounded bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 disabled:opacity-50"
           >
-            {submitting ? 'Processing...' : 'Reject'}
+            {submitting ? t('drafts.actions.processing') : t('drafts.actions.reject')}
           </button>
         </div>
       )}

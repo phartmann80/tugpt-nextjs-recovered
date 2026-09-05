@@ -1,0 +1,59 @@
+# deploy/systemd/tugpt-web.service
+#
+# Supervises ONLY the `web` container from the compose stack, leaving the
+# systemd-native workers (tugpt-whatsapp-worker, tugpt-draft-worker) running
+# untouched on the host.
+#
+# This exists because the web app was authorized to move onto the VPS on
+# 2026-08-20 while the workers were explicitly NOT. tugpt.service brings up the
+# whole compose file, which includes whatsapp-worker and draft-worker — running
+# it now would put a second consumer on each PGMQ queue alongside the native
+# units and double-process every message. Use that one only when the worker
+# cutover in docs/production_environment.md section 5.4 is being executed
+# deliberately; the two units must never both be enabled.
+#
+# Install (as root, on the VPS):
+#   cp deploy/systemd/tugpt-web.service /etc/systemd/system/tugpt-web.service
+#   systemctl daemon-reload
+#   systemctl enable --now tugpt-web.service
+#
+# Operate:
+#   systemctl status tugpt-web
+#   systemctl restart tugpt-web            # rebuild + recreate the container
+#   journalctl -u tugpt-web -f             # compose output
+#   docker compose -p tugpt logs -f web    # application output
+#
+# Health, from the host (the container binds loopback only):
+#   curl -fsS http://127.0.0.1:3001/api/v1/health
+#
+# EnvironmentFile supplies NEXT_PUBLIC_SUPABASE_URL and
+# NEXT_PUBLIC_SUPABASE_ANON_KEY for Compose's build-arg interpolation. Next.js
+# inlines those at build time, and docker-compose.yml declares them with `:?`,
+# so without this line the unit fails loudly at start rather than building an
+# image with empty values — which would send every /dashboard request to the
+# login page. web.env is also passed to the container at runtime by compose's
+# own env_file; this line is specifically for build-time interpolation.
+
+[Unit]
+Description=TuGPT web app (Docker Compose, web service only)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+# Refuse to run alongside the full-stack unit, which would start duplicate
+# worker containers.
+Conflicts=tugpt.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/tugpt
+EnvironmentFile=/etc/tugpt/web.env
+# No --remove-orphans: with a service filter it would tear down containers
+# Compose considers orphaned, which in this project would be the workers if
+# they are ever containerized alongside.
+ExecStart=/usr/bin/docker compose -p tugpt -f /opt/tugpt/docker-compose.yml up -d --build web
+ExecStop=/usr/bin/docker compose -p tugpt -f /opt/tugpt/docker-compose.yml stop web
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

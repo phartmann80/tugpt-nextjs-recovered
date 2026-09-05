@@ -1,16 +1,72 @@
 {
   "$schema": "https://turbo.build/schema.json",
+
+  // globalDependencies lists files OUTSIDE any package whose contents a task's
+  // result depends on. Turbo hashes only a package's own directory, so without
+  // this a test that reads a repo-root document keeps a cached pass after the
+  // document changes: `turbo run test` prints FULL TURBO while the test would
+  // fail if it actually ran.
+  //
+  // Two suites read these docs and assert they still match the code —
+  // apps/worker/tests/controlled-rollout-doc.test.ts and
+  // apps/worker/tests/server-migrations-doc.test.ts. CI runs cold so it was
+  // never wrong there, but a local `pnpm test` was, and turning on remote
+  // caching would have made it wrong everywhere.
+  //
+  // The cost is that editing either document invalidates every task in the
+  // monorepo. These files change rarely, and a guard that can report a false
+  // pass is worth less than the cache it saves.
+  //
+  // docker-compose.yml and the worker Dockerfile are here for the same reason:
+  // apps/worker/tests/worker-start-command.test.ts reads both, and without
+  // this a change to either leaves that suite's cached pass valid.
+  //
+  // supabase/migrations/** joined this list on 2026-09-03 for the same reason
+  // and with the same trade. apps/worker/tests/langdock-price-coverage.test.ts
+  // reads a migration and asserts every allowlisted Langdock model is priced
+  // there; without this entry, editing that migration leaves the suite's
+  // cached pass valid and a deleted price row reports FULL TURBO. CI runs cold
+  // so CI would still catch it, but a local `pnpm test` would not — which is
+  // precisely the failure that put the two documents above here.
+  //
+  // The cost is real and worth naming: this repo adds a migration in most
+  // PRs, so in practice it invalidates the monorepo's cache about once per
+  // change. That is roughly what CI does anyway, and a guard that can report a
+  // false pass is worth less than the cache it saves.
+  "globalDependencies": [
+    "docs/controlled-rollout.md",
+    "docs/server-migrations.md",
+    "docker-compose.yml",
+    "apps/worker/Dockerfile",
+    "supabase/migrations/**"
+  ],
+
+  // Every @tugpt/* package now compiles to dist/ and points `main` and
+  // `types` there, so anything that resolves one of them needs it built
+  // first. That is why typecheck, test and dev all carry `^build` — before
+  // 2026-08-26 the packages were consumed as raw TypeScript and none of them
+  // needed it.
+  //
+  // Without this, `turbo typecheck` fails with TS2307 "Cannot find module
+  // '@tugpt/security'" whenever the build cache happens to be cold for a
+  // package the task depends on, which is an ordering bug that shows up as a
+  // type error and sends people looking in the wrong place.
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
     },
     "lint": {},
-    "test": {},
+    "test": {
+      "dependsOn": ["^build"]
+    },
     "dev": {
+      "dependsOn": ["^build"],
       "cache": false,
       "persistent": true
     },
-    "typecheck": {}
+    "typecheck": {
+      "dependsOn": ["^build"]
+    }
   }
 }
